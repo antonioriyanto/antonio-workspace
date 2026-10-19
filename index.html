@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Antonio Riyanto — Workspace</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="src/css/styles.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { fontFamily: {
+                sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+                mono: ['JetBrains Mono', 'monospace']
+            } } }
+        }
+    </script>
+</head>
+<body class="min-h-screen flex flex-col selection:bg-zinc-700 selection:text-white">
+
+    <header class="sticky top-0 z-30 glass-panel border-t-0 border-x-0 px-4 lg:px-6 py-2.5">
+        <div class="max-w-[1920px] mx-auto flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-lg bg-zinc-900 dark:bg-zinc-100 text-zinc-100 dark:text-zinc-900 flex items-center justify-center font-bold text-xs tracking-tighter shadow-sm">AR</div>
+                <div class="flex items-center gap-2">
+                    <span class="font-bold text-sm tracking-tight text-zinc-900 dark:text-zinc-100">Antonio Riyanto</span>
+                    <span class="text-zinc-300 dark:text-zinc-700">/</span>
+                    <div class="relative inline-block text-left">
+                        <button onclick="App.toggleWorkspaceDropdown(event)" class="inline-flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white font-medium px-2 py-1 rounded-md glass-control">
+                            <span id="currentWorkspaceName">Watch Club Workspace</span>
+                            <i class="fa-solid fa-chevron-down text-[9px]"></i>
+                        </button>
+                        <div id="workspaceDropdownMenu" class="hidden absolute left-0 mt-1.5 w-48 rounded-xl glass-panel bg-white dark:bg-[#141417] shadow-xl border border-zinc-200 dark:border-zinc-800 p-1 z-50">
+                            <button onclick="App.switchWorkspace('Watch Club')" class="w-full text-left px-3 py-2 rounded-lg text-xs font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between">
+                                <span>Watch Club Workspace</span>
+                                <i class="fa-solid fa-check text-[10px] text-emerald-500" id="wsCheck-WatchClub"></i>
+                            </button>
+                            <button onclick="App.switchWorkspace('Personal Project')" class="w-full text-left px-3 py-2 rounded-lg text-xs font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-500 dark:text-zinc-400">
+                                <span>Personal Project</span>
+                                <i class="fa-solid fa-check text-[10px] text-emerald-500 hidden" id="wsCheck-Personal"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="hidden sm:flex items-center gap-2 pl-2 ml-1 border-l border-zinc-200 dark:border-zinc-800 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    <span id="currentDateDisplay">Memuat tanggal...</span>
+                    <span>·</span>
+                    <span id="syncStatusIndicator" class="inline-flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500/80"></span>
+                        <span>Tersimpan Lokal</span>
+                    </span>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <div class="inline-flex rounded-lg p-0.5 glass-control">
+                    <button id="btnViewKanban" onclick="App.setViewMode('kanban')" class="px-2.5 py-1 rounded-md text-xs font-medium transition flex items-center gap-1.5 bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 shadow-sm">
+                        <i class="fa-solid fa-table-columns text-[11px]"></i><span>Board</span>
+                    </button>
+                    <button id="btnViewSheet" onclick="App.setViewMode('sheet')" class="px-2.5 py-1 rounded-md text-xs font-medium transition flex items-center gap-1.5 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
+                        <i class="fa-solid fa-bars-staggered text-[11px]"></i><span>Tabel</span>
+                    </button>
+                </div>
+                <button onclick="App.openDirectoryModal('stores')" class="px-3 py-1.5 rounded-lg glass-control text-xs font-medium flex items-center gap-1.5" title="Kelola daftar Toko, Area Manager, SPV, PIC & Kategori">
+                    <i class="fa-solid fa-store text-[11px] text-zinc-400"></i><span class="hidden md:inline">Toko & PIC</span>
+                </button>
+                <button onclick="App.openCloudModal()" class="px-3 py-1.5 rounded-lg glass-control text-xs font-medium flex items-center gap-1.5" title="Backup data & sinkronisasi Google Sheets">
+                    <i class="fa-solid fa-arrows-rotate text-[11px] text-zinc-400"></i><span class="hidden md:inline">Sinkronisasi</span>
+                </button>
+                <div class="inline-flex rounded-lg p-0.5 glass-control" role="group">
+                    <button onclick="App.setTheme('light')" id="themeBtn-light" class="p-1.5 rounded-md text-[11px] transition" title="Mode Terang"><i class="fa-solid fa-sun"></i></button>
+                    <button onclick="App.setTheme('dark')" id="themeBtn-dark" class="p-1.5 rounded-md text-[11px] transition" title="Mode Gelap"><i class="fa-solid fa-moon"></i></button>
+                    <button onclick="App.setTheme('system')" id="themeBtn-system" class="p-1.5 rounded-md text-[11px] transition" title="Ikuti Sistem"><i class="fa-solid fa-desktop"></i></button>
+                </div>
+                <button onclick="App.openTaskModal()" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-zinc-950 font-medium text-xs shadow-sm transition active:scale-[0.98]">
+                    <i class="fa-solid fa-plus text-[11px]"></i><span>Task Baru</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <section class="max-w-[1920px] w-full mx-auto px-4 lg:px-6 pt-4 space-y-3">
+        <div id="priorityStripContainer" class="rounded-xl glass-panel px-3.5 py-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex flex-wrap items-center gap-2.5">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-rose-400"></span>
+                        <h2 class="text-xs font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Perlu Perhatian</h2>
+                        <span id="priorityStripCount" class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-medium">0</span>
+                    </div>
+                    <span class="text-zinc-300 dark:text-zinc-700 hidden sm:inline">|</span>
+                    <div id="briefingSummaryText" class="text-xs text-zinc-500 dark:text-zinc-400 flex flex-wrap items-center gap-2"></div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="App.QuickFilterUrgent()" id="btnQuickUrgent" class="px-2.5 py-1 rounded-md text-[11px] font-medium glass-control flex items-center gap-1.5">
+                        <i class="fa-solid fa-filter text-[10px]"></i><span>Filter Mendesak</span>
+                    </button>
+                    <button onclick="App.wakeAllSnoozed()" id="btnWakeSnoozed" class="px-2.5 py-1 rounded-md text-[11px] font-medium glass-control hidden items-center gap-1.5" title="Aktifkan kembali semua kartu yang di-snooze">
+                        <i class="fa-regular fa-clock text-[10px]"></i><span>Reset Snooze</span>
+                    </button>
+                    <button onclick="App.togglePriorityStrip()" class="px-2 py-1 rounded-md text-[11px] text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition flex items-center gap-1">
+                        <span id="priorityStripToggleText">Sembunyikan</span>
+                        <i id="priorityStripToggleIcon" class="fa-solid fa-chevron-up text-[10px]"></i>
+                    </button>
+                </div>
+            </div>
+            <div id="priorityStripCards" class="mt-2.5 flex gap-2.5 overflow-x-auto pb-1"></div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="relative flex-1 min-w-[220px] max-w-md">
+                <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-xs"></i>
+                <input id="searchInput" oninput="App.handleSearchInput()" type="text" placeholder="Cari task, toko, kendala, atau PIC..." class="w-full pl-8 pr-3 py-1.5 rounded-lg glass-panel text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500 transition">
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5">
+                <div class="relative inline-flex items-center">
+                    <i class="fa-solid fa-flag absolute left-2.5 text-[10px] text-zinc-400 pointer-events-none"></i>
+                    <select id="filterPriority" onchange="App.handleFilterChange()" class="clean-select pl-7 py-1.5 rounded-lg glass-control text-xs font-medium focus:outline-none cursor-pointer">
+                        <option value="ALL">Prioritas</option>
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="MEDIUM">Medium</option>
+                        <option value="LOW">Low</option>
+                    </select>
+                </div>
+                <div class="relative inline-flex items-center">
+                    <i class="fa-regular fa-user absolute left-2.5 text-[10px] text-zinc-400 pointer-events-none"></i>
+                    <select id="filterPicHq" onchange="App.handleFilterChange()" class="clean-select pl-7 py-1.5 rounded-lg glass-control text-xs font-medium focus:outline-none cursor-pointer">
+                        <option value="ALL">PIC</option>
+                    </select>
+                </div>
+                <div class="relative inline-flex items-center">
+                    <i class="fa-solid fa-compass absolute left-2.5 text-[10px] text-zinc-400 pointer-events-none"></i>
+                    <select id="filterAm" onchange="App.handleFilterChange()" class="clean-select pl-7 py-1.5 rounded-lg glass-control text-xs font-medium focus:outline-none cursor-pointer">
+                        <option value="ALL">Area Manager</option>
+                    </select>
+                </div>
+                <div class="relative inline-flex items-center">
+                    <i class="fa-solid fa-store absolute left-2.5 text-[10px] text-zinc-400 pointer-events-none"></i>
+                    <select id="filterStore" onchange="App.handleFilterChange()" class="clean-select pl-7 py-1.5 rounded-lg glass-control text-xs font-medium max-w-[175px] truncate focus:outline-none cursor-pointer">
+                        <option value="ALL">Toko</option>
+                    </select>
+                </div>
+                <div class="relative inline-flex items-center">
+                    <i class="fa-solid fa-tag absolute left-2.5 text-[10px] text-zinc-400 pointer-events-none"></i>
+                    <select id="filterCategory" onchange="App.handleFilterChange()" class="clean-select pl-7 py-1.5 rounded-lg glass-control text-xs font-medium focus:outline-none cursor-pointer">
+                        <option value="ALL">Kategori</option>
+                    </select>
+                </div>
+                <button onclick="App.resetFilters()" class="px-2.5 py-1.5 rounded-lg glass-control text-xs" title="Reset Filter">
+                    <i class="fa-solid fa-rotate-left text-[11px]"></i>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <main class="flex-1 max-w-[1920px] w-full mx-auto px-4 lg:px-6 py-4">
+        <div id="kanbanBoardContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5 items-start"></div>
+
+        <div id="sheetViewContainer" class="hidden rounded-xl glass-panel overflow-hidden">
+            <div class="px-4 py-3 border-b border-zinc-200/70 dark:border-zinc-800/80 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-bars-staggered text-zinc-400 text-xs"></i>
+                    <h3 class="text-xs font-semibold text-zinc-900 dark:text-zinc-100">Daftar Task</h3>
+                </div>
+                <span class="text-[11px] text-zinc-500">Klik baris untuk mengedit detail task</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                    <thead>
+                        <tr class="border-b border-zinc-200/80 dark:border-zinc-800 text-[11px] font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100/50 dark:bg-zinc-900/40">
+                            <th class="py-2.5 px-3.5 font-medium">Tanggal</th>
+                            <th class="py-2.5 px-3.5 font-medium">Task</th>
+                            <th class="py-2.5 px-3.5 font-medium">Toko & Area</th>
+                            <th class="py-2.5 px-3.5 font-medium">Prioritas</th>
+                            <th class="py-2.5 px-3.5 font-medium">Deadline</th>
+                            <th class="py-2.5 px-3.5 font-medium">PIC</th>
+                            <th class="py-2.5 px-3.5 font-medium">Status</th>
+                            <th class="py-2.5 px-3.5 font-medium text-center">Follow-Up</th>
+                            <th class="py-2.5 px-3.5 font-medium">Catatan</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sheetTableBody" class="divide-y divide-zinc-200/60 dark:divide-zinc-800/60"></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- TASK MODAL -->
+    <div id="taskModal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+        <div class="glass-panel bg-white dark:bg-[#141417] rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden my-auto border border-zinc-200 dark:border-zinc-800">
+            <div class="px-5 py-3.5 border-b border-zinc-200/80 dark:border-zinc-800 flex items-center justify-between">
+                <div>
+                    <h3 id="taskModalTitle" class="font-semibold text-sm text-zinc-900 dark:text-zinc-100">Task Baru</h3>
+                    <p class="text-[11px] text-zinc-500 dark:text-zinc-400">Pilih toko untuk menampilkan Area Manager & SPV secara otomatis</p>
+                </div>
+                <button onclick="App.closeTaskModal()" class="w-7 h-7 rounded-lg text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition flex items-center justify-center"><i class="fa-solid fa-xmark text-xs"></i></button>
+            </div>
+            <form id="taskForm" onsubmit="App.saveTaskFromModal(event)" class="p-5 space-y-4 max-h-[82vh] overflow-y-auto">
+                <input type="hidden" id="taskFormId">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div class="sm:col-span-2">
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Nama Task *</label>
+                        <input id="taskFormTitle" type="text" required placeholder="Mis. Poster Garmin WTC MOG 1 & 2" class="w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Kategori</label>
+                        <select id="taskFormCategory" class="clean-select w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600"></select>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Prioritas</label>
+                        <select id="taskFormPriority" class="clean-select w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600">
+                            <option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="CRITICAL">Critical</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tanggal Masuk</label>
+                        <input id="taskFormDateCreated" type="date" class="w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Deadline *</label>
+                        <input id="taskFormDeadline" type="date" required class="w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600">
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Status Progres</label>
+                        <select id="taskFormSubStatus" class="clean-select w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600"></select>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">PIC Pemberi Tugas</label>
+                        <select id="taskFormPicHq" class="clean-select w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600"></select>
+                    </div>
+                </div>
+                <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3.5 bg-zinc-50/50 dark:bg-zinc-900/40 space-y-2.5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <label class="block text-xs font-medium text-zinc-800 dark:text-zinc-200"><i class="fa-solid fa-store text-zinc-400 mr-1.5 text-[11px]"></i>Toko / Cabang (Bisa pilih lebih dari 1)</label>
+                        <div class="flex items-center gap-1.5">
+                            <button type="button" onclick="App.selectAllGeneralStore()" class="px-2 py-1 rounded text-[11px] font-medium glass-control">Semua Toko (HQ)</button>
+                            <button type="button" onclick="App.clearSelectedStoresInModal()" class="px-2 py-1 rounded text-[11px] font-medium glass-control">Reset</button>
+                        </div>
+                    </div>
+                    <div class="relative">
+                        <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-[11px]"></i>
+                        <input id="modalStoreSearch" oninput="App.handleModalStoreSearch()" type="text" placeholder="Cari nama toko atau Area Manager..." class="w-full pl-8 pr-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600">
+                    </div>
+                    <div id="modalStoreCheckboxList" class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto pr-1"></div>
+                    <div id="modalAutoAmSpvPreview" class="pt-2 border-t border-zinc-200/70 dark:border-zinc-800 text-[11px] flex flex-wrap items-center gap-1.5"></div>
+                </div>
+                <div>
+                    <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Catatan / Kendala</label>
+                    <textarea id="taskFormNotes" rows="3" placeholder="Tulis progres terakhir atau kendala di lapangan..." class="w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600"></textarea>
+                </div>
+                <div class="pt-3 border-t border-zinc-200/80 dark:border-zinc-800 flex items-center justify-between gap-3">
+                    <button type="button" id="btnDeleteTask" onclick="App.deleteCurrentTask()" class="hidden px-3 py-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10 text-xs font-medium transition"><i class="fa-regular fa-trash-can mr-1"></i> Hapus</button>
+                    <div class="flex items-center gap-2 ml-auto">
+                        <button type="button" onclick="App.closeTaskModal()" class="px-3.5 py-1.5 rounded-lg glass-control text-xs font-medium">Batal</button>
+                        <button type="submit" class="px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-zinc-950 font-medium text-xs shadow-sm transition">Simpan</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- SNOOZE MODAL -->
+    <div id="snoozeModal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="glass-panel bg-white dark:bg-[#141417] rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800">
+            <div class="px-5 py-3.5 border-b border-zinc-200/80 dark:border-zinc-800 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <i class="fa-regular fa-clock text-zinc-400 text-sm"></i>
+                    <div>
+                        <h3 class="font-semibold text-sm text-zinc-900 dark:text-zinc-100">Jadwal Follow-Up</h3>
+                        <p class="text-[11px] text-zinc-500">Sabtu & Minggu otomatis dilewati</p>
+                    </div>
+                </div>
+                <button onclick="App.closeSnoozeModal()" class="w-7 h-7 rounded-lg text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 flex items-center justify-center"><i class="fa-solid fa-xmark text-xs"></i></button>
+            </div>
+            <div class="p-5 space-y-4">
+                <div id="snoozeTaskSummary" class="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/70 border border-zinc-200/70 dark:border-zinc-800 text-xs space-y-1"></div>
+                <div>
+                    <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-2">Ingatkan lagi dalam:</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="App.applySnoozeWorkingDays(1)" class="p-2.5 rounded-lg glass-control text-left group"><div class="text-xs font-medium text-zinc-900 dark:text-zinc-100">Besok (+1 Hari Kerja)</div><div id="snoozePreview1" class="text-[11px] text-zinc-500 font-mono mt-0.5"></div></button>
+                        <button onclick="App.applySnoozeWorkingDays(2)" class="p-2.5 rounded-lg glass-control text-left group"><div class="text-xs font-medium text-zinc-900 dark:text-zinc-100">Lusa (+2 Hari Kerja)</div><div id="snoozePreview2" class="text-[11px] text-zinc-500 font-mono mt-0.5"></div></button>
+                        <button onclick="App.applySnoozeWorkingDays(3)" class="p-2.5 rounded-lg glass-control text-left group"><div class="text-xs font-medium text-zinc-900 dark:text-zinc-100">+3 Hari Kerja</div><div id="snoozePreview3" class="text-[11px] text-zinc-500 font-mono mt-0.5"></div></button>
+                        <button onclick="App.applySnoozeWorkingDays(5)" class="p-2.5 rounded-lg glass-control text-left group"><div class="text-xs font-medium text-zinc-900 dark:text-zinc-100">+5 Hari Kerja</div><div id="snoozePreview5" class="text-[11px] text-zinc-500 font-mono mt-0.5"></div></button>
+                        <button onclick="App.applySnoozeWorkingDays(7)" class="col-span-2 p-2.5 rounded-lg glass-control flex items-center justify-between group"><span class="text-xs font-medium text-zinc-900 dark:text-zinc-100">Seminggu (+7 Hari Kerja)</span><span id="snoozePreview7" class="text-[11px] text-zinc-500 font-mono"></span></button>
+                    </div>
+                </div>
+                <div class="pt-3 border-t border-zinc-200/70 dark:border-zinc-800 space-y-2.5">
+                    <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tanggal Manual</label>
+                        <div class="flex gap-2">
+                            <input type="date" id="customSnoozeDate" class="flex-1 px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                            <button onclick="App.applyCustomSnoozeDate()" class="px-3.5 py-1.5 rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 font-medium text-xs">Set Tanggal</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Catatan Follow-Up</label>
+                        <input type="text" id="snoozeFollowUpReason" placeholder="Mis. Menunggu ACC ukuran dari Ica..." class="w-full px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                    </div>
+                </div>
+                <div class="pt-2 flex items-center justify-between">
+                    <button onclick="App.clearTaskSnooze()" class="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition">Matikan Snooze</button>
+                    <button onclick="App.markTaskCompletedFromSnooze()" class="px-3 py-1.5 rounded-lg glass-control text-xs font-medium text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-check mr-1"></i>Tandai Done</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DIRECTORY MODAL -->
+    <div id="directoryModal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+        <div class="glass-panel bg-white dark:bg-[#141417] rounded-2xl max-w-4xl w-full shadow-2xl overflow-hidden my-auto border border-zinc-200 dark:border-zinc-800">
+            <div class="px-5 py-3.5 border-b border-zinc-200/80 dark:border-zinc-800 flex items-center justify-between">
+                <div>
+                    <h3 class="font-semibold text-sm text-zinc-900 dark:text-zinc-100">Data Toko, Area Manager & PIC</h3>
+                    <p class="text-[11px] text-zinc-500 dark:text-zinc-400">Kelola cabang Watch Club, kontak SPV, PIC HQ, dan kategori</p>
+                </div>
+                <button onclick="App.closeDirectoryModal()" class="w-7 h-7 rounded-lg text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 flex items-center justify-center"><i class="fa-solid fa-xmark text-xs"></i></button>
+            </div>
+            <div class="px-5 border-b border-zinc-200/80 dark:border-zinc-800 flex gap-4">
+                <button id="dirTab-stores" onclick="App.switchDirectoryTab('stores')" class="py-2.5 text-xs font-medium border-b-2 border-zinc-900 dark:border-zinc-100 text-zinc-900 dark:text-zinc-100"><i class="fa-solid fa-store mr-1.5 text-[11px]"></i>Toko & SPV</button>
+                <button id="dirTab-pics" onclick="App.switchDirectoryTab('pics')" class="py-2.5 text-xs font-medium border-b-2 border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-300"><i class="fa-regular fa-user mr-1.5 text-[11px]"></i>Daftar PIC</button>
+                <button id="dirTab-categories" onclick="App.switchDirectoryTab('categories')" class="py-2.5 text-xs font-medium border-b-2 border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-300"><i class="fa-solid fa-tag mr-1.5 text-[11px]"></i>Kategori</button>
+            </div>
+            <div id="dirContent-stores" class="p-5 space-y-3.5 max-h-[75vh] overflow-y-auto">
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <input id="newStoreName" type="text" placeholder="Nama Toko (mis. WTC Sorong)" class="px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                    <input id="newStoreAm" type="text" placeholder="Area Manager (mis. ITHO)" class="px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                    <input id="newStoreSpv" type="text" placeholder="Nama SPV / Kontak" class="px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                    <button onclick="App.addNewStore()" class="px-3 py-1.5 rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 font-medium text-xs">+ Tambah Toko</button>
+                </div>
+                <div class="relative">
+                    <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-xs"></i>
+                    <input id="dirStoreFilter" oninput="App.renderDirectoryStores()" type="text" placeholder="Cari toko atau Area Manager..." class="w-full pl-8 pr-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                </div>
+                <div class="overflow-x-auto border border-zinc-200/80 dark:border-zinc-800 rounded-xl">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-zinc-50 dark:bg-zinc-900/60 text-zinc-500 border-b border-zinc-200/80 dark:border-zinc-800">
+                            <tr>
+                                <th class="py-2 px-3 w-10 font-medium">#</th>
+                                <th class="py-2 px-3 font-medium">Toko</th>
+                                <th class="py-2 px-3 font-medium">Area Manager</th>
+                                <th class="py-2 px-3 font-medium">SPV / Kontak Cabang</th>
+                                <th class="py-2 px-3 text-right font-medium"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="directoryStoresTableBody" class="divide-y divide-zinc-200/60 dark:divide-zinc-800/60"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div id="dirContent-pics" class="hidden p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <input id="newPicName" type="text" placeholder="Nama PIC (mis. ICA)" class="px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                    <select id="newPicRole" class="clean-select px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                        <option value="HQ">PIC HQ</option>
+                        <option value="AM">Area Manager</option>
+                    </select>
+                    <input id="newPicColor" type="color" value="#a1a1aa" class="h-8 w-full rounded-lg cursor-pointer bg-transparent">
+                    <button onclick="App.addNewPic()" class="px-3 py-1.5 rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 font-medium text-xs">+ Tambah PIC</button>
+                </div>
+                <div id="directoryPicsGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2"></div>
+            </div>
+            <div id="dirContent-categories" class="hidden p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+                <div class="flex gap-2">
+                    <input id="newCategoryName" type="text" placeholder="Nama Kategori Baru..." class="flex-1 px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                    <button onclick="App.addNewCategory()" class="px-4 py-1.5 rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 font-medium text-xs">+ Tambah</button>
+                </div>
+                <div id="directoryCategoriesGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CLOUD MODAL -->
+    <div id="cloudModal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+        <div class="glass-panel bg-white dark:bg-[#141417] rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden my-auto border border-zinc-200 dark:border-zinc-800">
+            <div class="px-5 py-3.5 border-b border-zinc-200/80 dark:border-zinc-800 flex items-center justify-between">
+                <div>
+                    <h3 class="font-semibold text-sm text-zinc-900 dark:text-zinc-100">Sinkronisasi & Backup</h3>
+                    <p class="text-[11px] text-zinc-500 dark:text-zinc-400">Cadangkan data lokal, ekspor CSV/JSON, atau hubungkan ke Google Sheets</p>
+                </div>
+                <button onclick="App.closeCloudModal()" class="w-7 h-7 rounded-lg text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 flex items-center justify-center"><i class="fa-solid fa-xmark text-xs"></i></button>
+            </div>
+            <div class="p-5 space-y-4 max-h-[80vh] overflow-y-auto text-xs">
+                <!-- Backup Lokal -->
+                <div class="p-4 rounded-xl border border-zinc-200/80 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h4 class="font-medium text-zinc-900 dark:text-zinc-100">Backup Lokal (JSON / CSV)</h4>
+                        <p class="text-[11px] text-zinc-500 mt-0.5">Simpan atau pulihkan seluruh data task dan toko dari komputer Anda.</p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="App.exportBackupJson()" class="px-3 py-1.5 rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 font-medium flex items-center gap-1.5"><i class="fa-solid fa-download text-[10px]"></i> JSON</button>
+                        <button onclick="App.exportCsv()" class="px-3 py-1.5 rounded-lg glass-control font-medium flex items-center gap-1.5"><i class="fa-solid fa-file-csv text-[10px]"></i> CSV</button>
+                        <label class="px-3 py-1.5 rounded-lg glass-control font-medium cursor-pointer flex items-center gap-1.5">
+                            <i class="fa-solid fa-upload text-[10px]"></i> Import
+                            <input type="file" accept=".json" onchange="App.importBackupJson(event)" class="hidden">
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Google Sheets Sync -->
+                <div class="p-4 rounded-xl border border-zinc-200/80 dark:border-zinc-800 space-y-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <div>
+                            <h4 class="font-medium text-zinc-900 dark:text-zinc-100">Google Sheets Sync (Apps Script)</h4>
+                            <p class="text-[11px] text-zinc-500 mt-0.5">Hubungkan ke Google Spreadsheet pribadi tanpa biaya bulanan.</p>
+                        </div>
+                        <button onclick="App.copyGasCode()" class="px-2.5 py-1 rounded-lg glass-control text-[11px] font-medium"><i class="fa-regular fa-copy mr-1"></i>Copy Code.gs</button>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input id="gasWebhookUrlInput" type="url" placeholder="https://script.google.com/macros/s/.../exec" class="flex-1 px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+                        <button onclick="App.saveGasWebhookUrl()" class="px-3 py-1.5 rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 font-medium">Simpan URL</button>
+                        <button onclick="App.syncWithGoogleSheets('PUSH')" class="px-3 py-1.5 rounded-lg glass-control font-medium">Push</button>
+                        <button onclick="App.syncWithGoogleSheets('PULL')" class="px-3 py-1.5 rounded-lg glass-control font-medium">Pull</button>
+                    </div>
+                </div>
+
+                <!-- Status Penyimpanan & Emergency Rollback -->
+                <div class="p-4 rounded-xl border border-zinc-200/80 dark:border-zinc-800 space-y-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <div>
+                            <h4 class="font-medium text-zinc-900 dark:text-zinc-100">Status Penyimpanan & Emergency Rollback</h4>
+                            <p class="text-[11px] text-zinc-500 mt-0.5">Snapshot otomatis dibuat sebelum aksi berisiko (PULL, Import, Delete).</p>
+                        </div>
+                        <label class="inline-flex items-center gap-2 text-[11px] font-medium text-zinc-600 dark:text-zinc-300 cursor-pointer select-none">
+                            <input type="checkbox" id="autoSyncToggle" onchange="App.toggleAutoSync(this.checked)" class="rounded accent-emerald-600">
+                            <span>Auto-Sync</span>
+                        </label>
+                    </div>
+                    <div id="storageStatusPanel" class="grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
+                    <div class="pt-2 border-t border-zinc-200/70 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <span id="lastBackupText" class="text-zinc-500">Belum ada snapshot</span>
+                        <button onclick="App.rollbackFromEmergencyBackup()" class="px-3 py-1.5 rounded-lg glass-control font-medium"><i class="fa-solid fa-rotate-left mr-1"></i>Pulihkan Data Terakhir</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toastContainer" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <script src="src/js/config.js" defer></script>
+    <script src="src/js/storage.js" defer></script>
+    <script src="src/js/app.js" defer></script>
+</body>
+</html>
