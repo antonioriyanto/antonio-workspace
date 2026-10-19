@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#32323a" />
+      <stop offset="50%" stop-color="#18181c" />
+      <stop offset="100%" stop-color="#08080a" />
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="rgba(255, 255, 255, 0.28)" />
+      <stop offset="100%" stop-color="rgba(255, 255, 255, 0.05)" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.3" />
+    </filter>
+  </defs>
+  <!-- Background Rounded Square -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bgGrad)" stroke="url(#borderGrad)" stroke-width="1.5" />
+  <!-- AR Monogram Text -->
+  <text x="32" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif" font-size="28" font-weight="900" letter-spacing="-1.5" fill="#FFFFFF" text-anchor="middle" filter="url(#shadow)">AR</text>
+</svg>
