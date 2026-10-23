@@ -1,8 +1,9 @@
-import { PIC, Store, TaskFormData, Priority, StageId, AICommandResult } from '../types';
+import { PIC, Store, Task, TaskFormData, Priority, StageId, AICommandResult } from '../types';
 import { WTC_CONFIG } from '../config';
 import { getTodayIso, addWorkingDays } from '../utils/dateUtils';
 
 export interface AIParsingContext {
+  tasks?: Task[];
   pics: PIC[];
   categories: string[];
   stores: Store[];
@@ -26,11 +27,12 @@ const CANDIDATE_ENDPOINTS: CandidateEndpoint[] = [
 ];
 
 /**
- * Universal Intent Parser for Antonio Riyanto Workspace.
- * Parses conversational inputs into 3 distinct intents:
- * 1. CREATE_TASK: with exact time/reminder calculation and new store detection
- * 2. FILTER_BOARD: filters kanban board or sheet view
- * 3. UPDATE_TASK: moves or updates existing task status
+ * Context-Aware Assistant & Universal Intent Parser for Antonio Riyanto Workspace.
+ * Parses conversational inputs into 4 distinct intents:
+ * 1. ANSWER_QUERY: answers analytical board queries (e.g. "Ada berapa task telat hari ini?")
+ * 2. CREATE_TASK: creates tasks with exact reminder calculation and new store detection
+ * 3. FILTER_BOARD: filters kanban board or sheet view with semantic guardrails
+ * 4. UPDATE_TASK: moves or updates existing task status
  */
 export async function parseConversationalTask(
   prompt: string,
@@ -55,15 +57,48 @@ export async function parseConversationalTask(
   const categoriesList = context.categories;
   const storeListFormatted = context.stores.map(s => `${s.id}: ${s.name} (AM: ${s.am})`).join(', ');
 
+  // Inject active task summary so AI is context-aware
+  const tasksList = context.tasks || [];
+  const activeTasks = tasksList.filter(t => t.stageId !== 'COMPLETED');
+  const taskSummary = activeTasks.length > 0
+    ? activeTasks.map(t => {
+        const isOverdue = t.deadline && t.deadline < todayIso;
+        const isDueToday = t.deadline === todayIso;
+        const tag = isOverdue ? '[OVERDUE/TELAT]' : isDueToday ? '[DEADLINE HARI INI]' : '';
+        return `[#${t.id}] "${t.title}" (PIC: ${t.picHq}, Prioritas: ${t.priority}, Stage: ${t.stageId}, Deadline: ${t.deadline} ${tag})`.trim();
+      }).join('\n')
+    : '(Tidak ada task aktif di workspace saat ini)';
+
   const systemInstructionText = `
-Anda adalah Universal AI Command Parser untuk aplikasi Kanban 'Antonio Riyanto Workspace'.
-Tugas Anda membaca instruksi percakapan bahasa Indonesia / Inggris, lalu mengklasifikasikan dan mengonversinya ke dalam salah satu dari 3 INTENT:
-1. "CREATE_TASK" : Membuat task baru
-2. "FILTER_BOARD": Memfilter tampilan kanban board / sheet (misal: "tampilkan task bu evy", "filter urgent", "cari pop promo")
-3. "UPDATE_TASK" : Memperbarui / memindahkan status task yang ada (misal: "tandai selesai task kartu ucapan", "pindahkan task #T102 ke produksi")
+Anda adalah Context-Aware AI Assistant & Universal Command Parser untuk aplikasi Kanban 'Antonio Riyanto Workspace'.
+Tugas Anda membaca instruksi atau pertanyaan percakapan bahasa Indonesia / Inggris dari pengguna, lalu mengklasifikasikan dan mengonversinya ke dalam salah satu dari 4 INTENT:
+
+1. "ANSWER_QUERY" : Menjawab pertanyaan analitis, status, jumlah, atau informasi umum mengenai task di board saat ini.
+   - Contoh pertanyaan: "Ada berapa task telat hari ini?", "Siapa PIC yang pegang task paling banyak?", "Task apa saja yang deadline hari ini?", "Berapa task di stage creative?", "Ringkas kondisi board saat ini".
+   - Gunakan data "RINGKASAN TASK AKTIF SAAT INI" di bawah untuk menjawab secara akurat, ramah, dan ringkas.
+   - Wajib mengisi field "answer" dengan teks jawaban lengkap dalam bahasa Indonesia.
+
+2. "CREATE_TASK" : Membuat task baru dari instruksi percakapan.
+   - Contoh: "Bikin task baru kartu ucapan pic bu evy deadline besok", "Desain request pop promo urgent hari ini selesai untuk desain".
+
+3. "FILTER_BOARD" : Memfilter tampilan kanban board / sheet.
+   - Contoh: "Filter task bu evy", "Tampilkan yang urgent", "Filter toko wtc sorong", "Cari poster promo opening".
+   - PENTING (SEMANTIC FILTER GUARDRAIL):
+     * JANGAN PERNAH memasukkan kata sifat/konsep filter seperti "overdue", "telat", "urgent", "kritis", "selesai", "backlog", "creative" ke dalam "filter.search"!
+     * Kata sifat BUKAN kata pencarian teks judul task!
+     * Jika pengguna meminta task urgent -> isi filter.priority: "CRITICAL" atau filter.quickUrgentOnly: true, dan filter.search: "".
+     * Jika pengguna meminta task dari PIC tertentu -> isi filter.picHq: "NAMA_PIC", dan filter.search: "".
+     * Jika pengguna bertanya (contoh: "ada berapa task telat?") -> INI ADALAH ANSWER_QUERY, BUKAN FILTER_BOARD!
+     * "filter.search" HANYA digunakan jika pengguna mencari kata kunci teks produk atau subjek task spesifik (misal: "kartu ucapan", "shopping bag", "banner").
+
+4. "UPDATE_TASK" : Memperbarui / memindahkan status task yang ada.
+   - Contoh: "Tandai selesai task kartu ucapan", "Pindahkan task #T102 ke produksi".
 
 INFORMASI WAKTU SAAT INI:
 - Tanggal hari ini: ${todayIso} (${dayName})
+
+RINGKASAN TASK AKTIF SAAT INI DI BOARD:
+${taskSummary}
 
 DAFTAR PIC HQ / AM YANG TERSEDIA:
 ${picNames.join(', ')}
@@ -91,36 +126,26 @@ DAFTAR STAGE DAN SUB-STATUS:
 5. Stage "COMPLETED":
    - "COMPLETED_INSTALLED" (Terpasang / Selesai)
 
-ATURAN KHUSUS STAGE & PRIORITAS:
-- Permintaan seperti "desain request", "urgent hari ini selesai untuk desain", "tolong buat desain" ->
+ATURAN KHUSUS CREATE_TASK:
+- Permintaan seperti "desain request", "urgent hari ini selesai untuk desain" ->
   - stageId: "CREATIVE"
   - subStatus: "IN_DESIGN"
-  - priority: "CRITICAL" atau "HIGH"
+  - priority: "CRITICAL"
 - Permintaan "revisi desain" -> stageId: "CREATIVE", subStatus: "REVISION_REQUIRED"
-- Permintaan "acc cetak" / "proses produksi" -> stageId: "PRODUCTION", subStatus: "IN_PRODUCTION"
-- Permintaan "tandai selesai" / "sudah dipasang" -> stageId: "COMPLETED", subStatus: "COMPLETED_INSTALLED"
-
-ATURAN WAKTU & PENGINGAT (REMINDER):
-- "hari ini" -> deadline: ${todayIso}
-- "besok" -> deadline: hari ini + 1 hari
-- "lusa" -> deadline: hari ini + 2 hari
-- Jika menyebutkan jam (misal "deadline jam 3 sore", "jam 15:00") -> masukkan ke notes atau format deadline.
-- Pengingat (reminderAt format "YYYY-MM-DDTHH:mm:00"):
+- Waktu Pengingat (reminderAt format "YYYY-MM-DDTHH:mm:00"):
   - "sebelum makan siang" / "jam makan siang" -> "${todayIso}T11:30:00"
   - "sebelum pulang" / "sore sebelum pulang" -> "${todayIso}T16:30:00"
-  - "ingetin jam [HH]" / "alarm jam [HH]" -> "${todayIso}T[HH]:[MM]:00"
-  - Jika tidak ada instruksi pengingat, reminderAt bernilai null.
-
-ATURAN TOKO BARU (NEW STORE):
-- Jika prompt menyebutkan nama toko tertentu (misal: "wtc sorong", "wtc grand mall") dan toko tersebut BELUM ADA di DAFTAR TOKO TERDAFTAR di atas:
-  - Isi objek newStore: { "name": "WTC Sorong", "am": "" }
-  - storeIds: []
+  - "ingetin jam [HH]" -> "${todayIso}T[HH]:[MM]:00"
+- Toko Baru: jika menyebut toko yang belum ada di daftar toko terdaftar, isi newStore: { "name": "...", "am": "" } dan storeIds: [].
 
 FORMAT OUTPUT WAJIB:
 Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
 {
-  "intent": "CREATE_TASK" | "FILTER_BOARD" | "UPDATE_TASK",
+  "intent": "ANSWER_QUERY" | "CREATE_TASK" | "FILTER_BOARD" | "UPDATE_TASK",
   "explanation": "Penjelasan singkat",
+
+  // Wajib diisi jika intent == "ANSWER_QUERY"
+  "answer": "Jawaban lengkap dan jelas berdasarkan task aktif di board saat ini",
 
   // Wajib diisi jika intent == "CREATE_TASK"
   "task": {
@@ -143,7 +168,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
 
   // Wajib diisi jika intent == "FILTER_BOARD"
   "filter": {
-    "search": "kata kunci",
+    "search": "kata kunci spesifik produk (BUKAN 'overdue' / 'telat' / 'urgent')",
     "priority": "ALL" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
     "picHq": "ALL" | "NAMA PIC",
     "am": "ALL" | "NAMA AM",
@@ -173,7 +198,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
         {
           parts: [
             {
-              text: `Tolong parse instruksi/percakapan berikut:\n"${prompt.trim()}"`
+              text: `Tolong proses pesan/percakapan berikut:\n"${prompt.trim()}"`
             }
           ]
         }
@@ -298,33 +323,63 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
 
   // Determine intent
   const intentRaw = typeof parsedJson.intent === 'string' ? parsedJson.intent.toUpperCase() : 'CREATE_TASK';
-  const intent: 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' =
-    ['FILTER_BOARD', 'UPDATE_TASK'].includes(intentRaw) ? (intentRaw as 'FILTER_BOARD' | 'UPDATE_TASK') : 'CREATE_TASK';
+  const intent: 'ANSWER_QUERY' | 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' =
+    ['ANSWER_QUERY', 'FILTER_BOARD', 'UPDATE_TASK'].includes(intentRaw)
+      ? (intentRaw as 'ANSWER_QUERY' | 'FILTER_BOARD' | 'UPDATE_TASK')
+      : 'CREATE_TASK';
 
   const explanation = typeof parsedJson.explanation === 'string' ? parsedJson.explanation.trim() : '';
 
-  // 1. FILTER_BOARD intent handling
+  // 1. ANSWER_QUERY intent handling
+  if (intent === 'ANSWER_QUERY') {
+    const answerText = typeof parsedJson.answer === 'string' && parsedJson.answer.trim()
+      ? parsedJson.answer.trim()
+      : explanation || 'Informasi board berhasil diambil.';
+
+    return {
+      intent: 'ANSWER_QUERY',
+      explanation: explanation || 'Menjawab pertanyaan board',
+      answer: answerText
+    };
+  }
+
+  // 2. FILTER_BOARD intent handling
   if (intent === 'FILTER_BOARD') {
     const filterObj = (parsedJson.filter && typeof parsedJson.filter === 'object')
       ? (parsedJson.filter as Record<string, unknown>)
       : {};
 
+    let rawSearch = typeof filterObj.search === 'string' ? filterObj.search.trim() : '';
+    let quickUrgent = Boolean(filterObj.quickUrgentOnly);
+    let priorityFilter = typeof filterObj.priority === 'string' ? filterObj.priority : 'ALL';
+
+    // Strict semantic guardrail: do not let adjectives like "overdue" / "telat" / "urgent" become text queries
+    const searchLower = rawSearch.toLowerCase();
+    if (searchLower === 'urgent' || searchLower === 'kritis' || searchLower === 'asap') {
+      rawSearch = '';
+      quickUrgent = true;
+    } else if (searchLower === 'overdue' || searchLower === 'telat' || searchLower === 'terlambat') {
+      rawSearch = '';
+    } else if (searchLower === 'selesai' || searchLower === 'completed') {
+      rawSearch = '';
+    }
+
     return {
       intent: 'FILTER_BOARD',
       explanation: explanation || 'Filter board diterapkan',
       filter: {
-        search: typeof filterObj.search === 'string' ? filterObj.search.trim() : '',
-        priority: typeof filterObj.priority === 'string' ? filterObj.priority : 'ALL',
+        search: rawSearch,
+        priority: priorityFilter,
         picHq: typeof filterObj.picHq === 'string' ? filterObj.picHq : 'ALL',
         am: typeof filterObj.am === 'string' ? filterObj.am : 'ALL',
         store: typeof filterObj.store === 'string' ? filterObj.store : 'ALL',
         category: typeof filterObj.category === 'string' ? filterObj.category : 'ALL',
-        quickUrgentOnly: Boolean(filterObj.quickUrgentOnly)
+        quickUrgentOnly: quickUrgent
       }
     };
   }
 
-  // 2. UPDATE_TASK intent handling
+  // 3. UPDATE_TASK intent handling
   if (intent === 'UPDATE_TASK') {
     const updateObj = (parsedJson.update && typeof parsedJson.update === 'object')
       ? (parsedJson.update as Record<string, unknown>)
@@ -349,7 +404,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
     };
   }
 
-  // 3. CREATE_TASK intent handling (default)
+  // 4. CREATE_TASK intent handling (default)
   const taskObj = (parsedJson.task && typeof parsedJson.task === 'object')
     ? (parsedJson.task as Record<string, unknown>)
     : parsedJson;

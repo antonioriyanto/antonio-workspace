@@ -133,11 +133,12 @@ export interface AIParsedTaskResult {
   newStore?: { name: string; am?: string } | null;
 }
 
-export type AICommandIntent = 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK';
+export type AICommandIntent = 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'ANSWER_QUERY';
 
 export interface AICommandResult {
   intent: AICommandIntent;
   explanation: string;
+  answer?: string | null;
   task?: TaskFormData | null;
   newStore?: { name: string; am?: string } | null;
   filter?: {

@@ -6,6 +6,7 @@ import { getTodayIso } from '../utils/dateUtils';
 import { TaskFormData } from '../types';
 
 const EXAMPLE_PROMPTS = [
+  'Ada berapa task telat hari ini dan siapa saja PIC-nya?',
   'bikin task baru kartu ucapan pic bu evy deadline besok jam 3 sore ingetin sebelum makan siang toko wtc grand mall',
   'desain request pop promo urgent hari ini selesai untuk desain pic itho',
   'filter task bu evy yang urgent',
@@ -37,6 +38,7 @@ export const AIPromptBar: React.FC = () => {
   const [tempKey, setTempKey] = useState('');
   const [savedKeySuccess, setSavedKeySuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [aiAnswer, setAiAnswer] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -46,6 +48,7 @@ export const AIPromptBar: React.FC = () => {
       setTempKey(geminiApiKey);
       setShowKeyInput(!geminiApiKey);
       setErrorMessage(null);
+      setAiAnswer(null);
     }
   }, [isAiPromptOpen, geminiApiKey]);
 
@@ -73,12 +76,14 @@ export const AIPromptBar: React.FC = () => {
     }
 
     setErrorMessage(null);
+    setAiAnswer(null);
     setIsLoading(true);
     try {
       const todayIso = getTodayIso();
       const parsed = await parseConversationalTask(
         promptText,
         {
+          tasks,
           pics,
           categories,
           stores,
@@ -86,6 +91,13 @@ export const AIPromptBar: React.FC = () => {
         },
         geminiApiKey || tempKey.trim()
       );
+
+      // 0. ANSWER_QUERY intent
+      if (parsed.intent === 'ANSWER_QUERY') {
+        setAiAnswer(parsed.answer || parsed.explanation || 'Informasi berhasil didapatkan.');
+        addToast('🤖 Pertanyaan berhasil dijawab AI', 'info');
+        return;
+      }
 
       // 1. FILTER_BOARD intent
       if (parsed.intent === 'FILTER_BOARD' && parsed.filter) {
@@ -240,14 +252,14 @@ export const AIPromptBar: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
-                  Conversational AI Task Creator
+                  Conversational AI Assistant & Command Bar
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-medium">
                   Gemini Flash
                 </span>
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Ketik instruksi tugas harian dalam bahasa percakapan sehari-hari
+                Tanya status board, cari/filter task, atau buat task baru secara langsung
               </p>
             </div>
           </div>
@@ -366,6 +378,33 @@ export const AIPromptBar: React.FC = () => {
               >
                 <X className="w-3.5 h-3.5" />
               </button>
+            </div>
+          )}
+
+          {/* AI Q&A Answer Box */}
+          {aiAnswer && (
+            <div className="p-4 rounded-xl bg-blue-500/10 dark:bg-blue-500/10 border border-blue-500/25 space-y-2 animate-in fade-in slide-in-from-top-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-lg bg-blue-500/20 text-blue-500 flex items-center justify-center border border-blue-500/30">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
+                  </div>
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    Jawaban AI Assistant:
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAiAnswer(null)}
+                  className="p-1 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition"
+                  title="Tutup jawaban"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="text-xs sm:text-sm text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap leading-relaxed pl-8">
+                {aiAnswer}
+              </div>
             </div>
           )}
 
