@@ -125,7 +125,7 @@ export const AIPromptBar: React.FC = () => {
                   Conversational AI Task Creator
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-medium">
-                  Gemini 1.5 Flash
+                  Gemini Flash
                 </span>
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">

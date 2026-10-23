@@ -16,15 +16,13 @@ interface CandidateEndpoint {
 
 /**
  * Candidate models and API versions ordered by priority.
- * If one endpoint returns 404 (model not found) or is unsupported, fallback to next.
+ * Uses active current-gen models with fallback on 404/503.
  */
 const CANDIDATE_ENDPOINTS: CandidateEndpoint[] = [
-  { version: 'v1beta', model: 'gemini-1.5-flash-latest' },
-  { version: 'v1',     model: 'gemini-1.5-flash' },
-  { version: 'v1beta', model: 'gemini-1.5-flash' },
-  { version: 'v1beta', model: 'gemini-flash-latest' },
-  { version: 'v1beta', model: 'gemini-2.0-flash' },
-  { version: 'v1beta', model: 'gemini-2.0-flash-exp' }
+  { version: 'v1beta', model: 'gemini-2.5-flash' },
+  { version: 'v1beta', model: 'gemini-3.8-flash' },
+  { version: 'v1beta', model: 'gemini-2.5-flash-lite' },
+  { version: 'v1beta', model: 'gemini-flash-latest' }
 ];
 
 /**
@@ -186,6 +184,18 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
 
         if (response.status === 429 || message.toLowerCase().includes('quota') || message.toLowerCase().includes('rate limit')) {
           throw new Error(`Batas kuota Gemini API tercapai (Rate Limit / Quota Exceeded: ${message}). Silakan coba lagi beberapa saat.`);
+        }
+
+        // Handle 503 (Transient High Demand): continue to next candidate model seamlessly
+        if (
+          response.status === 503 ||
+          message.toLowerCase().includes('high demand') ||
+          message.toLowerCase().includes('temporarily overloaded') ||
+          message.toLowerCase().includes('unavailable')
+        ) {
+          console.warn(`[Gemini Fallback] Model ${candidate.version}/${candidate.model} 503 (High Demand): ${message}. Melanjutkan ke model berikutnya...`);
+          attemptErrors.push(`${candidate.version}/${candidate.model} [503 High Demand]: Server sedang sibuk, dialihkan ke model berikutnya.`);
+          continue;
         }
 
         // Model not found (404) or unsupported configuration (400) -> record and try next candidate
