@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { X, Trash2, Search, Store as StoreIcon, Sparkles, RotateCcw } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { X, Trash2, Search, Store as StoreIcon, Sparkles, RotateCcw, AlertTriangle, Bell, Plus } from 'lucide-react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { useTaskDraft } from '../hooks/useTaskDraft';
 import { WTC_CONFIG } from '../config';
@@ -10,6 +10,7 @@ export const TaskModal: React.FC = () => {
   const {
     isTaskModalOpen,
     editingTaskId,
+    prefilledTaskData,
     closeTaskModal,
     tasks,
     stores,
@@ -17,7 +18,9 @@ export const TaskModal: React.FC = () => {
     categories,
     saveTask,
     deleteTask,
-    activeWorkspace
+    activeWorkspace,
+    addStore,
+    addToast
   } = useWorkspaceStore();
 
   const isEditing = Boolean(editingTaskId);
@@ -39,7 +42,9 @@ export const TaskModal: React.FC = () => {
       storeIds: editingTask.storeIds,
       stageId: editingTask.stageId,
       subStatus: editingTask.subStatus,
-      notes: editingTask.notes
+      notes: editingTask.notes,
+      reminderAt: editingTask.reminderAt || null,
+      reminderNotified: editingTask.reminderNotified ?? false
     };
   }, [editingTask]);
 
@@ -50,10 +55,68 @@ export const TaskModal: React.FC = () => {
     lastSavedTime,
     clearDraft,
     clearDraftOnSubmit
-  } = useTaskDraft(activeWorkspace, isTaskModalOpen, isEditing, initialEditData);
+  } = useTaskDraft(activeWorkspace, isTaskModalOpen, isEditing, initialEditData, prefilledTaskData);
 
   // Store search filter inside modal
   const [storeFilterText, setStoreFilterText] = useState('');
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  // Dirty check to prevent accidental loss of in-progress input
+  const isDirty = useMemo(() => {
+    if (isEditing) {
+      if (!initialEditData) return false;
+      return (
+        formData.title !== initialEditData.title ||
+        formData.category !== initialEditData.category ||
+        formData.priority !== initialEditData.priority ||
+        formData.deadline !== initialEditData.deadline ||
+        formData.picHq !== initialEditData.picHq ||
+        formData.subStatus !== initialEditData.subStatus ||
+        formData.notes !== initialEditData.notes ||
+        formData.storeIds.join(',') !== initialEditData.storeIds.join(',')
+      );
+    }
+    // New task mode
+    return Boolean(
+      formData.title.trim() !== '' ||
+      formData.notes.trim() !== '' ||
+      formData.priority !== 'LOW' ||
+      formData.category !== WTC_CONFIG.DEFAULT_CATEGORIES[0] ||
+      !formData.storeIds.includes('ALL_STORES')
+    );
+  }, [formData, isEditing, initialEditData]);
+
+  const handleRequestClose = () => {
+    if (isDirty) {
+      setShowDiscardConfirm(true);
+    } else {
+      closeTaskModal();
+    }
+  };
+
+  // Intercept Escape key specifically inside TaskModal
+  useEffect(() => {
+    if (!isTaskModalOpen) {
+      setShowDiscardConfirm(false);
+      return;
+    }
+
+    const handleModalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (showDiscardConfirm) {
+          setShowDiscardConfirm(false);
+        } else if (isDirty) {
+          setShowDiscardConfirm(true);
+        } else {
+          closeTaskModal();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleModalKeyDown);
+    return () => window.removeEventListener('keydown', handleModalKeyDown);
+  }, [isTaskModalOpen, isDirty, showDiscardConfirm, closeTaskModal]);
 
   const filteredStores = useMemo(() => {
     if (!storeFilterText.trim()) return stores;
@@ -89,7 +152,7 @@ export const TaskModal: React.FC = () => {
 
   const handleDelete = () => {
     if (!editingTaskId) return;
-    if (window.confirm('Yakin ingin menghapus task ini?')) {
+    if (window.confirm('Yakin ingin memindahkan task ini ke keranjang sampah?')) {
       deleteTask(editingTaskId);
     }
   };
@@ -118,14 +181,27 @@ export const TaskModal: React.FC = () => {
     updateField('storeIds', []);
   };
 
+  const handleQuickAddStore = () => {
+    const rawName = storeFilterText.trim();
+    if (!rawName) return;
+
+    const newStore = addStore({ name: rawName, am: '', spv: '' });
+    const currentStoreIds = formData.storeIds.filter(id => id !== 'ALL_STORES');
+    if (!currentStoreIds.includes(newStore.id)) {
+      updateField('storeIds', [...currentStoreIds, newStore.id]);
+    }
+    setStoreFilterText('');
+    addToast(`Toko "${rawName}" berhasil ditambahkan & dipilih`, 'success');
+  };
+
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
       onClick={(e) => {
-        if (e.target === e.currentTarget) closeTaskModal();
+        if (e.target === e.currentTarget) handleRequestClose();
       }}
     >
-      <div className="glass-panel bg-white/95 dark:bg-[#141417]/95 rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden my-auto border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95 duration-150">
+      <div className="glass-panel bg-white/95 dark:bg-[#141417]/95 rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden my-auto border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95 duration-150 relative">
         {/* Modal Header */}
         <div className="px-5 py-3.5 border-b border-zinc-200/80 dark:border-zinc-800 flex items-center justify-between">
           <div>
@@ -137,6 +213,12 @@ export const TaskModal: React.FC = () => {
                 <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   <Sparkles className="w-2.5 h-2.5" />
                   <span>Draft restored</span>
+                </span>
+              )}
+              {!isEditing && prefilledTaskData && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                  <Sparkles className="w-2.5 h-2.5 text-blue-500" />
+                  <span>Dari AI Parser</span>
                 </span>
               )}
             </div>
@@ -161,7 +243,7 @@ export const TaskModal: React.FC = () => {
             )}
             <button
               type="button"
-              onClick={closeTaskModal}
+              onClick={handleRequestClose}
               className="w-7 h-7 rounded-lg text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition flex items-center justify-center"
             >
               <X className="w-4 h-4" />
@@ -215,8 +297,8 @@ export const TaskModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Row 2: Priority, Date Created, Deadline */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Row 2: Priority, Date Created, Deadline, Reminder */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
             <div>
               <label className="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">
                 Prioritas
@@ -253,6 +335,29 @@ export const TaskModal: React.FC = () => {
                 value={formData.deadline}
                 onChange={(e) => updateField('deadline', e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1 flex items-center justify-between">
+                <span className="flex items-center gap-1">
+                  <Bell className="w-3 h-3 text-amber-500" />
+                  <span>Alarm</span>
+                </span>
+                {formData.reminderAt && (
+                  <button
+                    type="button"
+                    onClick={() => updateField('reminderAt', null)}
+                    className="text-[10px] text-zinc-400 hover:text-rose-500"
+                  >
+                    Hapus
+                  </button>
+                )}
+              </label>
+              <input
+                type="datetime-local"
+                value={formData.reminderAt || ''}
+                onChange={(e) => updateField('reminderAt', e.target.value || null)}
+                className="w-full px-2.5 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500"
               />
             </div>
           </div>
@@ -339,6 +444,23 @@ export const TaskModal: React.FC = () => {
                 className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500"
               />
             </div>
+
+            {/* Quick Add Store button when no matching store */}
+            {storeFilterText.trim() !== '' && filteredStores.length === 0 && (
+              <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/25 flex flex-col sm:flex-row items-center justify-between gap-2.5 animate-in fade-in">
+                <span className="text-xs text-zinc-700 dark:text-zinc-300">
+                  Toko "<span className="font-semibold text-zinc-900 dark:text-zinc-100">{storeFilterText.trim()}</span>" belum ada di daftar.
+                </span>
+                <button
+                  type="button"
+                  onClick={handleQuickAddStore}
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium shadow-sm transition inline-flex items-center gap-1.5 shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Tambah "{storeFilterText.trim()}" sebagai Toko Baru</span>
+                </button>
+              </div>
+            )}
 
             {/* Checkbox grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto pr-1">
@@ -445,7 +567,7 @@ export const TaskModal: React.FC = () => {
             <div className="flex items-center gap-2 ml-auto">
               <button
                 type="button"
-                onClick={closeTaskModal}
+                onClick={handleRequestClose}
                 className="px-3.5 py-1.5 rounded-lg glass-control text-xs font-medium"
               >
                 Batal
@@ -459,7 +581,49 @@ export const TaskModal: React.FC = () => {
             </div>
           </div>
         </form>
+
+        {/* Safeguard Discard Confirmation Dialog */}
+        {showDiscardConfirm && (
+          <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-100">
+            <div className="glass-panel bg-white/95 dark:bg-[#18181c]/95 rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-zinc-200 dark:border-zinc-800 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-500 dark:text-amber-400 flex items-center justify-center border border-amber-500/20 flex-shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
+                    Perubahan Belum Disimpan
+                  </h4>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+                    Ada input yang belum Anda simpan. Draf Anda tetap aman tersimpan di browser jika jendela ditutup.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-200/70 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowDiscardConfirm(false)}
+                  className="px-3 py-1.5 rounded-lg glass-control text-xs font-medium text-zinc-700 dark:text-zinc-300"
+                >
+                  Lanjut Mengedit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDiscardConfirm(false);
+                    closeTaskModal();
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-medium text-xs shadow-sm transition"
+                >
+                  Tutup Jendela
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 };
+

@@ -47,6 +47,8 @@ export interface Task {
   snoozedUntil: string | null;
   followUpReason: string;
   lastActionDate: string | null;
+  reminderAt?: string | null;
+  reminderNotified?: boolean;
 }
 
 export interface TaskFormData {
@@ -61,6 +63,8 @@ export interface TaskFormData {
   stageId: StageId;
   subStatus: string;
   notes: string;
+  reminderAt?: string | null;
+  reminderNotified?: boolean;
 }
 
 export interface TaskDraft extends TaskFormData {
@@ -70,6 +74,8 @@ export interface TaskDraft extends TaskFormData {
 export interface WorkspaceData {
   workspaceName: string;
   tasks: Task[];
+  deletedTasks?: Task[];
+  aiActionLogs?: AIActionLog[];
   stores: Store[];
   pics: PIC[];
   categories: string[];
@@ -101,8 +107,90 @@ export interface SyncStatus {
   type: 'ok' | 'syncing' | 'error';
 }
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastMessage {
   id: string;
   message: string;
   type?: 'info' | 'success' | 'error';
+  duration?: number;
+  action?: ToastAction;
+}
+
+export interface AIParsedTaskResult {
+  title: string;
+  category: string;
+  priority: Priority;
+  deadline: string;
+  picHq: string;
+  storeIds: string[];
+  stageId: StageId;
+  subStatus: string;
+  notes: string;
+  reminderAt?: string | null;
+  newStore?: { name: string; am?: string } | null;
+}
+
+export type AIActionType = 'UPDATE_STAGE' | 'CREATE_TASK' | 'FILTER_BOARD' | 'DELETE_TASK';
+
+export type AICommandIntent = 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'DELETE_TASK' | 'ANSWER_QUERY';
+
+export interface AIActionChip {
+  id: string;
+  label: string;
+  actionIntent: AICommandIntent;
+  payload?: {
+    task?: TaskFormData;
+    targetTaskId?: string;
+    targetStageId?: StageId;
+    targetSubStatus?: string;
+    filter?: Record<string, unknown>;
+  };
+}
+
+export interface AICommandResult {
+  intent: AICommandIntent;
+  explanation: string;
+  answer?: string | null;
+  taskIds?: string[] | null; // Array ID task target untuk render mini cards instan
+  task?: TaskFormData | null;
+  newStore?: { name: string; am?: string } | null;
+  filter?: {
+    search?: string;
+    priority?: string;
+    picHq?: string;
+    am?: string;
+    store?: string;
+    category?: string;
+    quickUrgentOnly?: boolean;
+  } | null;
+  update?: {
+    targetQuery: string;
+    targetStageId?: StageId;
+    targetSubStatus?: string;
+  } | null;
+  delete?: {
+    targetQuery: string;
+    taskId?: string;
+  } | null;
+  chips?: AIActionChip[] | null;
+  secondaryTask?: TaskFormData | null;
+  chainedAction?: AICommandResult | null;
+}
+
+export interface AIActionLog {
+  id: string;
+  timestamp: string; // ISO datetime string
+  type: AIActionType;
+  description: string;
+  taskId?: string;
+  taskTitle?: string;
+  prevStageId?: StageId;
+  prevSubStatus?: string;
+  newStageId?: StageId;
+  newSubStatus?: string;
+  isReverted?: boolean;
 }

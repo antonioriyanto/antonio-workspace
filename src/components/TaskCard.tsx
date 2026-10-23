@@ -5,11 +5,12 @@ import {
   ChevronRight,
   Store as StoreIcon,
   AlertTriangle,
-  User
+  User,
+  Bell
 } from 'lucide-react';
 import { Task, StageId } from '../types';
 import { WTC_CONFIG } from '../config';
-import { getDeadlineInfo, getSnoozeState } from '../utils/dateUtils';
+import { getDeadlineInfo, getSnoozeState, formatReminderTime, isReminderImminentOrOverdue } from '../utils/dateUtils';
 import { resolveStoresAndAmSpv } from '../utils/storeUtils';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 
@@ -160,6 +161,21 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task }) => {
           <span>{deadlineInfo.label}</span>
         </div>
       </div>
+
+      {/* Reminder Pill if set */}
+      {task.reminderAt && (
+        <div
+          className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border w-fit ${
+            isReminderImminentOrOverdue(task.reminderAt, task.stageId)
+              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 animate-pulse font-medium ring-1 ring-amber-500/20'
+              : 'bg-zinc-100 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-400 border-zinc-200/60 dark:border-zinc-700/60'
+          }`}
+          title={`Waktu Alarm Pengingat: ${task.reminderAt}`}
+        >
+          <Bell className="w-2.5 h-2.5 text-amber-500" />
+          <span>Pengingat: {formatReminderTime(task.reminderAt)}</span>
+        </div>
+      )}
 
       {/* Snooze & Follow Up Indicator */}
       {snoozeState.isSnoozed && (

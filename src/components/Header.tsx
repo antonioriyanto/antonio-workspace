@@ -9,7 +9,9 @@ import {
   Sun,
   Moon,
   Laptop,
-  Plus
+  Plus,
+  Sparkles,
+  Trash2
 } from 'lucide-react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { formatDateHuman, getTodayIso } from '../utils/dateUtils';
@@ -26,7 +28,10 @@ export const Header: React.FC = () => {
     syncStatus,
     openTaskModal,
     openDirectoryModal,
-    openCloudModal
+    openCloudModal,
+    openAiPrompt,
+    openRecycleBin,
+    deletedTasks
   } = useWorkspaceStore();
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -176,6 +181,22 @@ export const Header: React.FC = () => {
             <span className="hidden md:inline">Sinkronisasi</span>
           </button>
 
+          {/* Recycle Bin Button */}
+          <button
+            type="button"
+            onClick={openRecycleBin}
+            className="relative px-2.5 py-1.5 rounded-lg glass-control text-xs font-medium text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition flex items-center gap-1"
+            title="Keranjang Sampah (Task Terhapus)"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline text-[11px]">Sampah</span>
+            {deletedTasks.length > 0 && (
+              <span className="w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-mono font-bold flex items-center justify-center shadow-sm">
+                {deletedTasks.length}
+              </span>
+            )}
+          </button>
+
           {/* Theme Switcher */}
           <div className="inline-flex rounded-lg p-0.5 glass-control" role="group">
             <button
@@ -215,6 +236,20 @@ export const Header: React.FC = () => {
               <Laptop className="w-3 h-3" />
             </button>
           </div>
+
+          {/* Conversational AI Quick Task Button */}
+          <button
+            type="button"
+            onClick={openAiPrompt}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600/15 via-purple-600/15 to-amber-500/15 hover:from-blue-600/25 hover:via-purple-600/25 hover:to-amber-500/25 text-blue-600 dark:text-blue-300 font-medium text-xs border border-blue-500/30 transition shadow-sm active:scale-[0.98] group"
+            title="Conversational AI Task Creator (Cmd / Ctrl + K)"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-500 dark:text-amber-300 group-hover:rotate-12 transition-transform" />
+            <span>AI Quick Task</span>
+            <kbd className="hidden lg:inline text-[9px] font-mono px-1 py-0.2 rounded bg-zinc-200/60 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-300 border border-zinc-300/60 dark:border-zinc-700/60 ml-0.5">
+              ⌘K
+            </kbd>
+          </button>
 
           {/* New Task CTA */}
           <button

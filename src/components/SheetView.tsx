@@ -1,8 +1,8 @@
 import React, { useMemo } from 'react';
-import { Table as TableIcon, Clock, AlertTriangle } from 'lucide-react';
+import { Table as TableIcon, Clock, AlertTriangle, Bell } from 'lucide-react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { WTC_CONFIG } from '../config';
-import { formatDateShort, getDeadlineInfo, getSnoozeState } from '../utils/dateUtils';
+import { formatDateShort, getDeadlineInfo, getSnoozeState, formatReminderTime, isReminderImminentOrOverdue } from '../utils/dateUtils';
 import { resolveStoresAndAmSpv } from '../utils/storeUtils';
 
 export const SheetView: React.FC = () => {
@@ -155,10 +155,25 @@ export const SheetView: React.FC = () => {
 
                   {/* Deadline */}
                   <td className="py-2.5 px-3.5 whitespace-nowrap">
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] ${deadlineInfo.badgeClass}`}>
-                      {deadlineInfo.status === 'OVERDUE' && <AlertTriangle className="w-2.5 h-2.5" />}
-                      {deadlineInfo.label}
-                    </span>
+                    <div className="flex flex-col gap-1">
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] w-fit ${deadlineInfo.badgeClass}`}>
+                        {deadlineInfo.status === 'OVERDUE' && <AlertTriangle className="w-2.5 h-2.5" />}
+                        {deadlineInfo.label}
+                      </span>
+                      {task.reminderAt && (
+                        <span
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] w-fit ${
+                            isReminderImminentOrOverdue(task.reminderAt, task.stageId)
+                              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 animate-pulse font-medium ring-1 ring-amber-500/20'
+                              : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700'
+                          }`}
+                          title={`Waktu Alarm Pengingat: ${task.reminderAt}`}
+                        >
+                          <Bell className="w-2.5 h-2.5 text-amber-500" />
+                          <span>{formatReminderTime(task.reminderAt)}</span>
+                        </span>
+                      )}
+                    </div>
                   </td>
 
                   {/* PIC */}
