@@ -9,8 +9,27 @@ export interface AIParsingContext {
   todayIso: string;
 }
 
+interface CandidateEndpoint {
+  version: 'v1beta' | 'v1';
+  model: string;
+}
+
 /**
- * Parses natural conversational prompt into structured TaskFormData using Google Gemini 1.5 Flash.
+ * Candidate models and API versions ordered by priority.
+ * If one endpoint returns 404 (model not found) or is unsupported, fallback to next.
+ */
+const CANDIDATE_ENDPOINTS: CandidateEndpoint[] = [
+  { version: 'v1beta', model: 'gemini-1.5-flash-latest' },
+  { version: 'v1',     model: 'gemini-1.5-flash' },
+  { version: 'v1beta', model: 'gemini-1.5-flash' },
+  { version: 'v1beta', model: 'gemini-flash-latest' },
+  { version: 'v1beta', model: 'gemini-2.0-flash' },
+  { version: 'v1beta', model: 'gemini-2.0-flash-exp' }
+];
+
+/**
+ * Parses natural conversational prompt into structured TaskFormData using Google Gemini.
+ * Features automatic model and API version fallback with clean JSON extraction.
  */
 export async function parseConversationalTask(
   prompt: string,
@@ -82,7 +101,7 @@ ATURAN PRIORITAS:
 - Jika santai / minor -> "LOW"
 
 ATURAN FORMAT OUTPUT:
-Keluarkan HANYA JSON murni (tanpa teks penjelasan lain) dengan struktur:
+Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) dengan struktur:
 {
   "title": "Judul singkat dan jelas dalam huruf kapital atau Title Case (misal: 'KARTU UCAPAN NATAL')",
   "picHq": "Nama PIC yang cocok dari daftar PIC (misal: 'BU EVY')",
@@ -90,7 +109,6 @@ Keluarkan HANYA JSON murni (tanpa teks penjelasan lain) dengan struktur:
   "priority": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
   "dateCreated": "${todayIso}",
   "deadline": "YYYY-MM-DD",
-  "picHq": "Nama PIC persis sesuai daftar",
   "storeIds": ["ALL_STORES"] atau ["S01", dll jika menyebut toko spesifik],
   "stageId": "BACKLOG" | "CREATIVE" | "PRODUCTION" | "LOGISTICS" | "COMPLETED",
   "subStatus": "ID subStatus yang cocok dengan stage di atas",
@@ -98,63 +116,131 @@ Keluarkan HANYA JSON murni (tanpa teks penjelasan lain) dengan struktur:
 }
 `.trim();
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const attemptErrors: string[] = [];
+  let parsedJson: Record<string, unknown> | null = null;
 
-  const requestBody = {
-    contents: [
-      {
-        parts: [
-          {
-            text: `Tolong parse percakapan berikut menjadi objek Task JSON:\n"${prompt.trim()}"`
+  // Try candidate endpoints in fallback sequence
+  for (const candidate of CANDIDATE_ENDPOINTS) {
+    const endpointUrl = `https://generativelanguage.googleapis.com/${candidate.version}/models/${candidate.model}:generateContent?key=${apiKey}`;
+
+    const requestBody = candidate.version === 'v1'
+      ? {
+          contents: [
+            {
+              parts: [
+                {
+                  text: `${systemInstructionText}\n\nTolong parse percakapan berikut menjadi objek Task JSON (output HANYA JSON murni tanpa pembungkus markdown):\n"${prompt.trim()}"`
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.1
           }
-        ]
-      }
-    ],
-    systemInstruction: {
-      parts: [
-        {
-          text: systemInstructionText
         }
-      ]
-    },
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.1
+      : {
+          contents: [
+            {
+              parts: [
+                {
+                  text: `Tolong parse percakapan berikut menjadi objek Task JSON:\n"${prompt.trim()}"`
+                }
+              ]
+            }
+          ],
+          systemInstruction: {
+            parts: [
+              {
+                text: systemInstructionText
+              }
+            ]
+          },
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.1
+          }
+        };
+
+    try {
+      const response = await fetch(endpointUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const message = errorData?.error?.message || `HTTP ${response.status} ${response.statusText}`;
+
+        // Immediate stop for invalid credentials or quota issues
+        if (
+          response.status === 401 ||
+          response.status === 403 ||
+          message.toLowerCase().includes('api_key_invalid') ||
+          message.toLowerCase().includes('api key not valid')
+        ) {
+          throw new Error(`API Key Gemini tidak valid atau izin akses ditolak (${message}). Pastikan API Key Anda aktif di Google AI Studio.`);
+        }
+
+        if (response.status === 429 || message.toLowerCase().includes('quota') || message.toLowerCase().includes('rate limit')) {
+          throw new Error(`Batas kuota Gemini API tercapai (Rate Limit / Quota Exceeded: ${message}). Silakan coba lagi beberapa saat.`);
+        }
+
+        // Model not found (404) or unsupported configuration (400) -> record and try next candidate
+        console.warn(`[Gemini Fallback] Model ${candidate.version}/${candidate.model} gagal (${response.status}): ${message}`);
+        attemptErrors.push(`${candidate.version}/${candidate.model} [${response.status}]: ${message}`);
+        continue;
+      }
+
+      const result = await response.json();
+      const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!rawText) {
+        attemptErrors.push(`${candidate.version}/${candidate.model}: Respon kosong dari model.`);
+        continue;
+      }
+
+      // Robust clean JSON extraction (strips markdown ```json ... ``` wrapper or surrounding text)
+      let cleanedText = rawText.trim();
+      cleanedText = cleanedText.replace(/```(?:json)?\s*/gi, '').replace(/\s*```/g, '').trim();
+
+      const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        cleanedText = jsonMatch[0];
+      }
+
+      try {
+        parsedJson = JSON.parse(cleanedText);
+        // Successfully parsed JSON, break out of candidate loop
+        break;
+      } catch (parseErr) {
+        console.warn(`[Gemini JSON Parse Error] Candidate ${candidate.version}/${candidate.model}:`, rawText);
+        attemptErrors.push(`${candidate.version}/${candidate.model}: Format output bukan JSON yang valid.`);
+        continue;
+      }
+    } catch (err: unknown) {
+      // Re-throw critical authentication / quota errors directly
+      if (err instanceof Error && (err.message.includes('API Key Gemini tidak valid') || err.message.includes('Batas kuota Gemini API tercapai'))) {
+        throw err;
+      }
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Gemini Fetch Error] ${candidate.version}/${candidate.model}:`, errMsg);
+      attemptErrors.push(`${candidate.version}/${candidate.model}: ${errMsg}`);
     }
-  };
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(requestBody)
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const message = errorData?.error?.message || `HTTP ${response.status} ${response.statusText}`;
-    throw new Error(`Gagal menghubungi Gemini API: ${message}`);
   }
 
-  const result = await response.json();
-  const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!rawText) {
-    throw new Error('Gemini tidak memberikan respon teks yang valid.');
+  if (!parsedJson) {
+    const errorDetails = attemptErrors.length > 0
+      ? attemptErrors.map(e => `• ${e}`).join('\n')
+      : 'Tidak ada endpoint model yang merespon.';
+    throw new Error(
+      `Gagal menghubungi Gemini API. Semua endpoint model fallback tidak dapat diakses:\n${errorDetails}\n\nPastikan API Key Anda valid dan memiliki izin akses di Google AI Studio (https://aistudio.google.com).`
+    );
   }
 
-  // Parse JSON from returned text
-  let parsedJson: Record<string, unknown>;
-  try {
-    const cleanedText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-    parsedJson = JSON.parse(cleanedText);
-  } catch (err) {
-    console.error('Failed to parse Gemini output as JSON:', rawText);
-    throw new Error('Respon Gemini tidak dapat diubah ke format JSON yang valid.');
-  }
-
-  // Normalize and validate parsed JSON
+  // Normalize and validate parsed JSON into TaskFormData
   const title = (typeof parsedJson.title === 'string' && parsedJson.title.trim())
     ? parsedJson.title.trim()
     : prompt.slice(0, 40).toUpperCase();

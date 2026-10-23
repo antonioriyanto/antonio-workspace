@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, X, ArrowRight, Loader2, Key, HelpCircle, Check } from 'lucide-react';
+import { Sparkles, X, ArrowRight, Loader2, Key, HelpCircle, Check, AlertCircle } from 'lucide-react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { parseConversationalTask } from '../services/aiTaskService';
 import { getTodayIso } from '../utils/dateUtils';
@@ -29,6 +29,7 @@ export const AIPromptBar: React.FC = () => {
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [tempKey, setTempKey] = useState('');
   const [savedKeySuccess, setSavedKeySuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -37,6 +38,7 @@ export const AIPromptBar: React.FC = () => {
       setTimeout(() => inputRef.current?.focus(), 80);
       setTempKey(geminiApiKey);
       setShowKeyInput(!geminiApiKey);
+      setErrorMessage(null);
     }
   }, [isAiPromptOpen, geminiApiKey]);
 
@@ -63,6 +65,7 @@ export const AIPromptBar: React.FC = () => {
       return;
     }
 
+    setErrorMessage(null);
     setIsLoading(true);
     try {
       const todayIso = getTodayIso();
@@ -80,11 +83,13 @@ export const AIPromptBar: React.FC = () => {
       // Successfully parsed: close AI bar and open TaskModal with parsed data
       closeAiPrompt();
       setPromptText('');
+      setErrorMessage(null);
       openTaskModal(null, parsed);
       addToast('✨ Task berhasil dianalisis AI! Silakan tinjau sebelum disimpan.', 'success');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Gagal memproses prompt dengan AI';
-      addToast(msg, 'error');
+      setErrorMessage(msg);
+      addToast(msg.length > 80 ? msg.slice(0, 80) + '...' : msg, 'error');
       if (msg.includes('API Key')) {
         setShowKeyInput(true);
       }
@@ -218,10 +223,33 @@ export const AIPromptBar: React.FC = () => {
             {isLoading && (
               <div className="absolute inset-0 bg-white/70 dark:bg-black/70 backdrop-blur-xs rounded-xl flex items-center justify-center gap-2.5 text-xs font-medium text-blue-600 dark:text-blue-400 animate-in fade-in duration-150">
                 <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-                <span>Sedang menganalisis prompt dengan Gemini 1.5 Flash...</span>
+                <span>Sedang menganalisis prompt dengan Gemini AI...</span>
               </div>
             )}
           </div>
+
+          {/* Error Details Banner */}
+          {errorMessage && (
+            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-600 dark:text-rose-400 text-xs flex items-start gap-2.5 animate-in fade-in slide-in-from-top-1">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-rose-500" />
+              <div className="flex-1 space-y-1">
+                <div className="font-semibold text-rose-700 dark:text-rose-300">
+                  Kendala Menghubungi Gemini AI:
+                </div>
+                <div className="font-mono text-[11px] whitespace-pre-wrap leading-relaxed opacity-95">
+                  {errorMessage}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setErrorMessage(null)}
+                className="p-1 rounded-md hover:bg-rose-500/10 text-rose-400 hover:text-rose-700 dark:hover:text-rose-200 transition"
+                title="Tutup pesan error"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Quick Examples */}
           <div className="space-y-1.5">
