@@ -16,12 +16,12 @@ interface CandidateEndpoint {
 
 /**
  * Candidate models and API versions ordered by priority.
- * Uses active current-gen models with fallback on 404/503.
+ * Uses active current-gen models (gemini-3.5-flash-lite, gemini-3.8-flash, gemini-flash-latest)
+ * with 1s retry on transient 503 and automatic fallback on 404.
  */
 const CANDIDATE_ENDPOINTS: CandidateEndpoint[] = [
-  { version: 'v1beta', model: 'gemini-2.5-flash' },
+  { version: 'v1beta', model: 'gemini-3.5-flash-lite' },
   { version: 'v1beta', model: 'gemini-3.8-flash' },
-  { version: 'v1beta', model: 'gemini-2.5-flash-lite' },
   { version: 'v1beta', model: 'gemini-flash-latest' }
 ];
 
@@ -159,18 +159,29 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
           }
         };
 
-    try {
-      const response = await fetch(endpointUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestBody)
-      });
+    let response: Response | null = null;
+    let lastStatus = 0;
+    let lastErrorMsg = '';
 
-      if (!response.ok) {
+    // Up to 2 attempts: initial call + 1 retry with 1000ms delay if 503 occurs
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        response = await fetch(endpointUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (response.ok) {
+          break; // Succeeded! Break retry loop and proceed to parse JSON
+        }
+
         const errorData = await response.json().catch(() => ({}));
         const message = errorData?.error?.message || `HTTP ${response.status} ${response.statusText}`;
+        lastStatus = response.status;
+        lastErrorMsg = message;
 
         // Immediate stop for invalid credentials or quota issues
         if (
@@ -186,24 +197,38 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
           throw new Error(`Batas kuota Gemini API tercapai (Rate Limit / Quota Exceeded: ${message}). Silakan coba lagi beberapa saat.`);
         }
 
-        // Handle 503 (Transient High Demand): continue to next candidate model seamlessly
-        if (
+        // Handle 503 (Transient High Demand): wait 1000ms and retry once
+        const is503 =
           response.status === 503 ||
           message.toLowerCase().includes('high demand') ||
           message.toLowerCase().includes('temporarily overloaded') ||
-          message.toLowerCase().includes('unavailable')
-        ) {
-          console.warn(`[Gemini Fallback] Model ${candidate.version}/${candidate.model} 503 (High Demand): ${message}. Melanjutkan ke model berikutnya...`);
-          attemptErrors.push(`${candidate.version}/${candidate.model} [503 High Demand]: Server sedang sibuk, dialihkan ke model berikutnya.`);
-          continue;
+          message.toLowerCase().includes('unavailable');
+
+        if (is503 && attempt === 0) {
+          console.warn(`[Gemini 503 Retry] Model ${candidate.model} 503 high demand: ${message}. Menunggu 1000ms untuk mencoba ulang...`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue; // Retry once
         }
 
-        // Model not found (404) or unsupported configuration (400) -> record and try next candidate
-        console.warn(`[Gemini Fallback] Model ${candidate.version}/${candidate.model} gagal (${response.status}): ${message}`);
-        attemptErrors.push(`${candidate.version}/${candidate.model} [${response.status}]: ${message}`);
-        continue;
+        // Non-503 error (e.g. 404 model not found) or 503 failed after retry -> break to fallback
+        break;
+      } catch (err: unknown) {
+        // Re-throw critical authentication / quota errors directly
+        if (err instanceof Error && (err.message.includes('API Key Gemini tidak valid') || err.message.includes('Batas kuota Gemini API tercapai'))) {
+          throw err;
+        }
+        lastErrorMsg = err instanceof Error ? err.message : String(err);
+        break;
       }
+    }
 
+    if (!response || !response.ok) {
+      console.warn(`[Gemini Fallback] Model ${candidate.version}/${candidate.model} gagal (${lastStatus}): ${lastErrorMsg}`);
+      attemptErrors.push(`${candidate.version}/${candidate.model} [${lastStatus || 'Error'}]: ${lastErrorMsg}`);
+      continue;
+    }
+
+    try {
       const result = await response.json();
       const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
 
@@ -221,23 +246,13 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
         cleanedText = jsonMatch[0];
       }
 
-      try {
-        parsedJson = JSON.parse(cleanedText);
-        // Successfully parsed JSON, break out of candidate loop
-        break;
-      } catch (parseErr) {
-        console.warn(`[Gemini JSON Parse Error] Candidate ${candidate.version}/${candidate.model}:`, rawText);
-        attemptErrors.push(`${candidate.version}/${candidate.model}: Format output bukan JSON yang valid.`);
-        continue;
-      }
-    } catch (err: unknown) {
-      // Re-throw critical authentication / quota errors directly
-      if (err instanceof Error && (err.message.includes('API Key Gemini tidak valid') || err.message.includes('Batas kuota Gemini API tercapai'))) {
-        throw err;
-      }
-      const errMsg = err instanceof Error ? err.message : String(err);
-      console.warn(`[Gemini Fetch Error] ${candidate.version}/${candidate.model}:`, errMsg);
-      attemptErrors.push(`${candidate.version}/${candidate.model}: ${errMsg}`);
+      parsedJson = JSON.parse(cleanedText);
+      // Successfully parsed JSON, break out of candidate loop
+      break;
+    } catch (parseErr) {
+      console.warn(`[Gemini JSON Parse Error] Candidate ${candidate.version}/${candidate.model}:`, parseErr);
+      attemptErrors.push(`${candidate.version}/${candidate.model}: Format output bukan JSON yang valid.`);
+      continue;
     }
   }
 
