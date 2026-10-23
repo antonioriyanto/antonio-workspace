@@ -12,8 +12,11 @@ import { AIPromptBar } from './components/AIPromptBar';
 import { RecycleBinModal } from './components/RecycleBinModal';
 import { ToastContainer } from './components/ToastContainer';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
+import { useReminderEngine } from './hooks/useReminderEngine';
 
 export const App: React.FC = () => {
+  useReminderEngine();
+
   const {
     viewMode,
     init,

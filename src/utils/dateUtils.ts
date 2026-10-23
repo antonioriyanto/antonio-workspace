@@ -132,3 +132,37 @@ export function getSnoozeState(task: Task) {
     untilFormatted: formatDateShort(task.snoozedUntil)
   };
 }
+
+export function formatReminderTime(isoDateTime?: string | null): string {
+  if (!isoDateTime) return '';
+  try {
+    const d = new Date(isoDateTime);
+    if (isNaN(d.getTime())) return '';
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    
+    // If not today, prepend short date
+    const todayStr = getTodayIso();
+    const isToday = isoDateTime.startsWith(todayStr);
+    if (!isToday) {
+      const day = d.getDate();
+      const month = d.toLocaleDateString('id-ID', { month: 'short' });
+      return `${day} ${month} ${hours}:${minutes}`;
+    }
+    return `${hours}:${minutes}`;
+  } catch {
+    return '';
+  }
+}
+
+export function isReminderImminentOrOverdue(isoDateTime?: string | null, stageId?: string): boolean {
+  if (!isoDateTime || stageId === 'COMPLETED') return false;
+  try {
+    const d = new Date(isoDateTime);
+    if (isNaN(d.getTime())) return false;
+    // Due within 15 minutes or already passed
+    return d.getTime() <= Date.now() + 15 * 60 * 1000;
+  } catch {
+    return false;
+  }
+}

@@ -98,6 +98,7 @@ interface WorkspaceStoreState {
   openRecycleBin: () => void;
   closeRecycleBin: () => void;
   moveTaskStage: (taskId: string, newStageId: StageId, newSubStatus?: string) => void;
+  markReminderNotified: (taskId: string) => void;
 
   // Snooze actions
   openSnoozeModal: (taskId: string) => void;
@@ -111,7 +112,7 @@ interface WorkspaceStoreState {
   openDirectoryModal: (tab?: 'stores' | 'pics' | 'categories') => void;
   closeDirectoryModal: () => void;
   setDirectoryTab: (tab: 'stores' | 'pics' | 'categories') => void;
-  addStore: (store: Omit<Store, 'id' | 'no'>) => void;
+  addStore: (store: Omit<Store, 'id' | 'no'>) => Store;
   deleteStore: (storeId: string) => void;
   addPic: (pic: Omit<PIC, 'id'>) => void;
   deletePic: (picId: string) => void;
@@ -425,6 +426,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         // Edit existing task
         updatedTasks = state.tasks.map(t => {
           if (t.id === formData.id) {
+            const reminderChanged = (t.reminderAt || null) !== (formData.reminderAt || null);
             return {
               ...t,
               title: formData.title.trim(),
@@ -437,6 +439,8 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
               stageId: formData.stageId,
               subStatus: formData.subStatus,
               notes: formData.notes.trim(),
+              reminderAt: formData.reminderAt || null,
+              reminderNotified: reminderChanged ? false : (t.reminderNotified ?? false),
               lastActionDate: getTodayIso()
             };
           }
@@ -458,6 +462,8 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           stageId: formData.stageId || 'BACKLOG',
           subStatus: formData.subStatus || 'AWAITING_ASSETS',
           notes: formData.notes.trim(),
+          reminderAt: formData.reminderAt || null,
+          reminderNotified: false,
           snoozedUntil: null,
           followUpReason: '',
           lastActionDate: getTodayIso()
@@ -705,6 +711,31 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       scheduleAutoPush();
     },
 
+    markReminderNotified: (taskId: string) => {
+      const state = get();
+      const updatedTasks = state.tasks.map(t => {
+        if (t.id === taskId) {
+          return { ...t, reminderNotified: true };
+        }
+        return t;
+      });
+
+      const updatedData: WorkspaceData = {
+        workspaceName: state.activeWorkspace,
+        tasks: updatedTasks,
+        deletedTasks: state.deletedTasks || [],
+        stores: state.stores,
+        pics: state.pics,
+        categories: state.categories,
+        gasWebhookUrl: state.gasWebhookUrl,
+        lastModified: state.lastModified,
+        lastSyncedAt: state.lastSyncedAt
+      };
+
+      persistWorkspaceData(updatedData);
+      set({ tasks: updatedTasks });
+    },
+
     openSnoozeModal: (taskId: string) => {
       set({ isSnoozeModalOpen: true, snoozeTaskId: taskId });
     },
@@ -865,6 +896,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       set({ stores: updatedStores, lastModified: nowIso });
       get().addToast(`Toko "${newStore.name}" berhasil ditambahkan`, 'success');
       scheduleAutoPush();
+      return newStore;
     },
 
     deleteStore: (storeId: string) => {

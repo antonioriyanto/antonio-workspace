@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { X, Trash2, Search, Store as StoreIcon, Sparkles, RotateCcw, AlertTriangle } from 'lucide-react';
+import { X, Trash2, Search, Store as StoreIcon, Sparkles, RotateCcw, AlertTriangle, Bell, Plus } from 'lucide-react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { useTaskDraft } from '../hooks/useTaskDraft';
 import { WTC_CONFIG } from '../config';
@@ -18,7 +18,9 @@ export const TaskModal: React.FC = () => {
     categories,
     saveTask,
     deleteTask,
-    activeWorkspace
+    activeWorkspace,
+    addStore,
+    addToast
   } = useWorkspaceStore();
 
   const isEditing = Boolean(editingTaskId);
@@ -40,7 +42,9 @@ export const TaskModal: React.FC = () => {
       storeIds: editingTask.storeIds,
       stageId: editingTask.stageId,
       subStatus: editingTask.subStatus,
-      notes: editingTask.notes
+      notes: editingTask.notes,
+      reminderAt: editingTask.reminderAt || null,
+      reminderNotified: editingTask.reminderNotified ?? false
     };
   }, [editingTask]);
 
@@ -177,6 +181,19 @@ export const TaskModal: React.FC = () => {
     updateField('storeIds', []);
   };
 
+  const handleQuickAddStore = () => {
+    const rawName = storeFilterText.trim();
+    if (!rawName) return;
+
+    const newStore = addStore({ name: rawName, am: '', spv: '' });
+    const currentStoreIds = formData.storeIds.filter(id => id !== 'ALL_STORES');
+    if (!currentStoreIds.includes(newStore.id)) {
+      updateField('storeIds', [...currentStoreIds, newStore.id]);
+    }
+    setStoreFilterText('');
+    addToast(`Toko "${rawName}" berhasil ditambahkan & dipilih`, 'success');
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
@@ -280,8 +297,8 @@ export const TaskModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Row 2: Priority, Date Created, Deadline */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Row 2: Priority, Date Created, Deadline, Reminder */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
             <div>
               <label className="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">
                 Prioritas
@@ -318,6 +335,29 @@ export const TaskModal: React.FC = () => {
                 value={formData.deadline}
                 onChange={(e) => updateField('deadline', e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1 flex items-center justify-between">
+                <span className="flex items-center gap-1">
+                  <Bell className="w-3 h-3 text-amber-500" />
+                  <span>Alarm</span>
+                </span>
+                {formData.reminderAt && (
+                  <button
+                    type="button"
+                    onClick={() => updateField('reminderAt', null)}
+                    className="text-[10px] text-zinc-400 hover:text-rose-500"
+                  >
+                    Hapus
+                  </button>
+                )}
+              </label>
+              <input
+                type="datetime-local"
+                value={formData.reminderAt || ''}
+                onChange={(e) => updateField('reminderAt', e.target.value || null)}
+                className="w-full px-2.5 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500"
               />
             </div>
           </div>
@@ -404,6 +444,23 @@ export const TaskModal: React.FC = () => {
                 className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500"
               />
             </div>
+
+            {/* Quick Add Store button when no matching store */}
+            {storeFilterText.trim() !== '' && filteredStores.length === 0 && (
+              <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/25 flex flex-col sm:flex-row items-center justify-between gap-2.5 animate-in fade-in">
+                <span className="text-xs text-zinc-700 dark:text-zinc-300">
+                  Toko "<span className="font-semibold text-zinc-900 dark:text-zinc-100">{storeFilterText.trim()}</span>" belum ada di daftar.
+                </span>
+                <button
+                  type="button"
+                  onClick={handleQuickAddStore}
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium shadow-sm transition inline-flex items-center gap-1.5 shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Tambah "{storeFilterText.trim()}" sebagai Toko Baru</span>
+                </button>
+              </div>
+            )}
 
             {/* Checkbox grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto pr-1">

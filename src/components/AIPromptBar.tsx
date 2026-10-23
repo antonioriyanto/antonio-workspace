@@ -3,25 +3,32 @@ import { Sparkles, X, ArrowRight, Loader2, Key, HelpCircle, Check, AlertCircle }
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { parseConversationalTask } from '../services/aiTaskService';
 import { getTodayIso } from '../utils/dateUtils';
+import { TaskFormData } from '../types';
 
 const EXAMPLE_PROMPTS = [
-  'tolong bikin task baru pic bu evy kartu ucapan deadline cetak lusa hari ini preview dlu',
-  'desain pop promo opening wtc sorong deadline jumat depan pic itho urgent',
-  'shopping bag lipat packaging pic ica acc vendor deadline lusa',
-  'videotron update materi wtc bogor pic ica deadline besok'
+  'bikin task baru kartu ucapan pic bu evy deadline besok jam 3 sore ingetin sebelum makan siang toko wtc grand mall',
+  'desain request pop promo urgent hari ini selesai untuk desain pic itho',
+  'filter task bu evy yang urgent',
+  'tandai selesai task kartu ucapan natal'
 ];
 
 export const AIPromptBar: React.FC = () => {
   const {
     isAiPromptOpen,
     closeAiPrompt,
+    tasks,
     pics,
     categories,
     stores,
     openTaskModal,
     addToast,
     geminiApiKey,
-    setGeminiApiKey
+    setGeminiApiKey,
+    addStore,
+    setFilter,
+    toggleQuickUrgent,
+    quickUrgentOnly,
+    moveTaskStage
   } = useWorkspaceStore();
 
   const [promptText, setPromptText] = useState('');
@@ -80,12 +87,123 @@ export const AIPromptBar: React.FC = () => {
         geminiApiKey || tempKey.trim()
       );
 
-      // Successfully parsed: close AI bar and open TaskModal with parsed data
-      closeAiPrompt();
-      setPromptText('');
-      setErrorMessage(null);
-      openTaskModal(null, parsed);
-      addToast('✨ Task berhasil dianalisis AI! Silakan tinjau sebelum disimpan.', 'success');
+      // 1. FILTER_BOARD intent
+      if (parsed.intent === 'FILTER_BOARD' && parsed.filter) {
+        if (parsed.filter.quickUrgentOnly && !quickUrgentOnly) {
+          toggleQuickUrgent();
+        }
+        if (parsed.filter.search !== undefined) setFilter('search', parsed.filter.search);
+        if (parsed.filter.priority) setFilter('priority', parsed.filter.priority);
+        if (parsed.filter.picHq) setFilter('picHq', parsed.filter.picHq);
+        if (parsed.filter.am) setFilter('am', parsed.filter.am);
+        if (parsed.filter.store) setFilter('store', parsed.filter.store);
+        if (parsed.filter.category) setFilter('category', parsed.filter.category);
+
+        closeAiPrompt();
+        setPromptText('');
+        setErrorMessage(null);
+        addToast(`🔍 Filter diterapkan: ${parsed.explanation || 'Tampilan board diperbarui'}`, 'info');
+        return;
+      }
+
+      // 2. UPDATE_TASK intent
+      if (parsed.intent === 'UPDATE_TASK' && parsed.update) {
+        const query = (parsed.update.targetQuery || '').toLowerCase().trim();
+        const cleanQuery = query.replace(/^#/, '');
+
+        // Find matches among tasks
+        const matches = tasks.filter(t =>
+          t.id.toLowerCase() === cleanQuery ||
+          t.title.toLowerCase().includes(cleanQuery)
+        );
+
+        if (matches.length === 1) {
+          const targetTask = matches[0];
+          const newStage = parsed.update.targetStageId || 'COMPLETED';
+          const newSubStatus = parsed.update.targetSubStatus;
+          const prevStage = targetTask.stageId;
+          const prevSubStatus = targetTask.subStatus;
+
+          moveTaskStage(targetTask.id, newStage, newSubStatus);
+          closeAiPrompt();
+          setPromptText('');
+          setErrorMessage(null);
+
+          // Interactive toast with 7-second undo button
+          addToast(
+            `Task "${targetTask.title}" dipindahkan ke ${newStage}`,
+            'success',
+            {
+              label: 'Undo',
+              onClick: () => {
+                moveTaskStage(targetTask.id, prevStage, prevSubStatus);
+                addToast(`Perubahan task "${targetTask.title}" dibatalkan`, 'info');
+              }
+            },
+            7000
+          );
+          return;
+        } else if (matches.length > 1) {
+          // Ambiguous: filter board safely by query rather than guessing
+          setFilter('search', cleanQuery);
+          closeAiPrompt();
+          setPromptText('');
+          setErrorMessage(null);
+          addToast(
+            `Ditemukan ${matches.length} task dengan nama serupa. Board difilter untuk Anda pilih.`,
+            'info'
+          );
+          return;
+        } else {
+          // No match: search on board
+          setFilter('search', cleanQuery);
+          closeAiPrompt();
+          setPromptText('');
+          setErrorMessage(null);
+          addToast(
+            `Task "${cleanQuery}" tidak ditemukan persis. Board difilter dengan kata kunci tersebut.`,
+            'info'
+          );
+          return;
+        }
+      }
+
+      // 3. CREATE_TASK intent (default)
+      if (parsed.task) {
+        let storeIds = [...(parsed.task.storeIds || ['ALL_STORES'])];
+
+        // Auto-register new store if detected
+        if (parsed.newStore?.name) {
+          const rawStoreName = parsed.newStore.name.trim();
+          const existing = stores.find(s => s.name.toLowerCase() === rawStoreName.toLowerCase());
+          if (existing) {
+            if (!storeIds.includes(existing.id)) {
+              storeIds = storeIds.filter(id => id !== 'ALL_STORES').concat(existing.id);
+            }
+          } else {
+            const created = addStore({ name: rawStoreName, am: parsed.newStore.am || '', spv: '' });
+            storeIds = storeIds.filter(id => id !== 'ALL_STORES').concat(created.id);
+            addToast(`Toko baru "${rawStoreName}" otomatis didaftarkan`, 'info');
+          }
+        }
+
+        const taskDataToPrefill: TaskFormData = {
+          ...parsed.task,
+          storeIds: storeIds.length > 0 ? storeIds : ['ALL_STORES']
+        };
+
+        closeAiPrompt();
+        setPromptText('');
+        setErrorMessage(null);
+        openTaskModal(null, taskDataToPrefill);
+        addToast(
+          parsed.newStore
+            ? '✨ Task dianalisis AI (Toko baru otomatis didaftarkan)! Silakan tinjau sebelum disimpan.'
+            : '✨ Task berhasil dianalisis AI! Silakan tinjau sebelum disimpan.',
+          'success'
+        );
+        return;
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Gagal memproses prompt dengan AI';
       setErrorMessage(msg);

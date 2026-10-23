@@ -15,7 +15,9 @@ export function getDefaultFormData(): TaskFormData {
     storeIds: ['ALL_STORES'],
     stageId: 'BACKLOG' as StageId,
     subStatus: 'AWAITING_ASSETS',
-    notes: ''
+    notes: '',
+    reminderAt: null,
+    reminderNotified: false
   };
 }
 

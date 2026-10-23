@@ -47,6 +47,8 @@ export interface Task {
   snoozedUntil: string | null;
   followUpReason: string;
   lastActionDate: string | null;
+  reminderAt?: string | null;
+  reminderNotified?: boolean;
 }
 
 export interface TaskFormData {
@@ -61,6 +63,8 @@ export interface TaskFormData {
   stageId: StageId;
   subStatus: string;
   notes: string;
+  reminderAt?: string | null;
+  reminderNotified?: boolean;
 }
 
 export interface TaskDraft extends TaskFormData {
@@ -125,4 +129,29 @@ export interface AIParsedTaskResult {
   stageId: StageId;
   subStatus: string;
   notes: string;
+  reminderAt?: string | null;
+  newStore?: { name: string; am?: string } | null;
+}
+
+export type AICommandIntent = 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK';
+
+export interface AICommandResult {
+  intent: AICommandIntent;
+  explanation: string;
+  task?: TaskFormData | null;
+  newStore?: { name: string; am?: string } | null;
+  filter?: {
+    search?: string;
+    priority?: string;
+    picHq?: string;
+    am?: string;
+    store?: string;
+    category?: string;
+    quickUrgentOnly?: boolean;
+  } | null;
+  update?: {
+    targetQuery: string;
+    targetStageId?: StageId;
+    targetSubStatus?: string;
+  } | null;
 }

@@ -1,4 +1,4 @@
-import { PIC, Store, TaskFormData, Priority, StageId } from '../types';
+import { PIC, Store, TaskFormData, Priority, StageId, AICommandResult } from '../types';
 import { WTC_CONFIG } from '../config';
 import { getTodayIso, addWorkingDays } from '../utils/dateUtils';
 
@@ -26,14 +26,17 @@ const CANDIDATE_ENDPOINTS: CandidateEndpoint[] = [
 ];
 
 /**
- * Parses natural conversational prompt into structured TaskFormData using Google Gemini.
- * Features automatic model and API version fallback with clean JSON extraction.
+ * Universal Intent Parser for Antonio Riyanto Workspace.
+ * Parses conversational inputs into 3 distinct intents:
+ * 1. CREATE_TASK: with exact time/reminder calculation and new store detection
+ * 2. FILTER_BOARD: filters kanban board or sheet view
+ * 3. UPDATE_TASK: moves or updates existing task status
  */
 export async function parseConversationalTask(
   prompt: string,
   context: AIParsingContext,
   customApiKey?: string
-): Promise<TaskFormData> {
+): Promise<AICommandResult> {
   const apiKey =
     customApiKey?.trim() ||
     (typeof window !== 'undefined' ? localStorage.getItem('WTC_GEMINI_API_KEY')?.trim() : '') ||
@@ -53,8 +56,11 @@ export async function parseConversationalTask(
   const storeListFormatted = context.stores.map(s => `${s.id}: ${s.name} (AM: ${s.am})`).join(', ');
 
   const systemInstructionText = `
-Anda adalah AI Intent Parser untuk aplikasi Workspace Kanban 'Antonio Riyanto Workspace'.
-Tugas Anda adalah membaca instruksi percakapan sehari-hari dalam Bahasa Indonesia atau Inggris, lalu mengonversinya menjadi objek JSON task yang valid.
+Anda adalah Universal AI Command Parser untuk aplikasi Kanban 'Antonio Riyanto Workspace'.
+Tugas Anda membaca instruksi percakapan bahasa Indonesia / Inggris, lalu mengklasifikasikan dan mengonversinya ke dalam salah satu dari 3 INTENT:
+1. "CREATE_TASK" : Membuat task baru
+2. "FILTER_BOARD": Memfilter tampilan kanban board / sheet (misal: "tampilkan task bu evy", "filter urgent", "cari pop promo")
+3. "UPDATE_TASK" : Memperbarui / memindahkan status task yang ada (misal: "tandai selesai task kartu ucapan", "pindahkan task #T102 ke produksi")
 
 INFORMASI WAKTU SAAT INI:
 - Tanggal hari ini: ${todayIso} (${dayName})
@@ -65,11 +71,11 @@ ${picNames.join(', ')}
 DAFTAR KATEGORI YANG TERSEDIA:
 ${categoriesList.join(', ')}
 
-DAFTAR TOKO / CABANG:
+DAFTAR TOKO TERDAFTAR:
 - "ALL_STORES" (Semua Toko / HQ)
 - Toko spesifik: ${storeListFormatted}
 
-DAFTAR STAGE DAN SUB-STATUS YANG VALID:
+DAFTAR STAGE DAN SUB-STATUS:
 1. Stage "BACKLOG":
    - "AWAITING_ASSETS" (Awaiting Brief / Menunggu materi)
 2. Stage "CREATIVE":
@@ -85,32 +91,73 @@ DAFTAR STAGE DAN SUB-STATUS YANG VALID:
 5. Stage "COMPLETED":
    - "COMPLETED_INSTALLED" (Terpasang / Selesai)
 
-ATURAN PERHITUNGAN DEADLINE DARI PERCAKAPAN:
-- "hari ini" / "today" -> ${todayIso}
-- "besok" / "tomorrow" -> tanggal hari ini + 1 hari
-- "lusa" -> tanggal hari ini + 2 hari
-- "minggu depan" / "senin depan" -> hari Senin terdekat berikutnya
-- Jika ada tanggal spesifik (misal "28 okt", "15 november"), hitung tahun saat ini (${todayDate.getFullYear()}) dan format ke YYYY-MM-DD.
-- Jika tidak disebutkan tanggal deadline, default adalah 3 hari kerja ke depan.
+ATURAN KHUSUS STAGE & PRIORITAS:
+- Permintaan seperti "desain request", "urgent hari ini selesai untuk desain", "tolong buat desain" ->
+  - stageId: "CREATIVE"
+  - subStatus: "IN_DESIGN"
+  - priority: "CRITICAL" atau "HIGH"
+- Permintaan "revisi desain" -> stageId: "CREATIVE", subStatus: "REVISION_REQUIRED"
+- Permintaan "acc cetak" / "proses produksi" -> stageId: "PRODUCTION", subStatus: "IN_PRODUCTION"
+- Permintaan "tandai selesai" / "sudah dipasang" -> stageId: "COMPLETED", subStatus: "COMPLETED_INSTALLED"
 
-ATURAN PRIORITAS:
-- Jika mendesak ("urgent", "asap", "kritis", "segera", "penting banget") -> "CRITICAL" atau "HIGH"
-- Jika normal -> "MEDIUM"
-- Jika santai / minor -> "LOW"
+ATURAN WAKTU & PENGINGAT (REMINDER):
+- "hari ini" -> deadline: ${todayIso}
+- "besok" -> deadline: hari ini + 1 hari
+- "lusa" -> deadline: hari ini + 2 hari
+- Jika menyebutkan jam (misal "deadline jam 3 sore", "jam 15:00") -> masukkan ke notes atau format deadline.
+- Pengingat (reminderAt format "YYYY-MM-DDTHH:mm:00"):
+  - "sebelum makan siang" / "jam makan siang" -> "${todayIso}T11:30:00"
+  - "sebelum pulang" / "sore sebelum pulang" -> "${todayIso}T16:30:00"
+  - "ingetin jam [HH]" / "alarm jam [HH]" -> "${todayIso}T[HH]:[MM]:00"
+  - Jika tidak ada instruksi pengingat, reminderAt bernilai null.
 
-ATURAN FORMAT OUTPUT:
-Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) dengan struktur:
+ATURAN TOKO BARU (NEW STORE):
+- Jika prompt menyebutkan nama toko tertentu (misal: "wtc sorong", "wtc grand mall") dan toko tersebut BELUM ADA di DAFTAR TOKO TERDAFTAR di atas:
+  - Isi objek newStore: { "name": "WTC Sorong", "am": "" }
+  - storeIds: []
+
+FORMAT OUTPUT WAJIB:
+Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
 {
-  "title": "Judul singkat dan jelas dalam huruf kapital atau Title Case (misal: 'KARTU UCAPAN NATAL')",
-  "picHq": "Nama PIC yang cocok dari daftar PIC (misal: 'BU EVY')",
-  "category": "Kategori yang paling cocok dari daftar kategori (misal: 'Print/POSM')",
-  "priority": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
-  "dateCreated": "${todayIso}",
-  "deadline": "YYYY-MM-DD",
-  "storeIds": ["ALL_STORES"] atau ["S01", dll jika menyebut toko spesifik],
-  "stageId": "BACKLOG" | "CREATIVE" | "PRODUCTION" | "LOGISTICS" | "COMPLETED",
-  "subStatus": "ID subStatus yang cocok dengan stage di atas",
-  "notes": "Catatan penting, detail kendala, atau arahan tambahan dari prompt"
+  "intent": "CREATE_TASK" | "FILTER_BOARD" | "UPDATE_TASK",
+  "explanation": "Penjelasan singkat",
+
+  // Wajib diisi jika intent == "CREATE_TASK"
+  "task": {
+    "title": "Judul singkat jelas dalam HURUF KAPITAL",
+    "picHq": "Nama PIC cocok dari daftar",
+    "category": "Kategori yang cocok",
+    "priority": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
+    "dateCreated": "${todayIso}",
+    "deadline": "YYYY-MM-DD",
+    "reminderAt": "YYYY-MM-DDTHH:mm:ss" | null,
+    "storeIds": ["ALL_STORES"] atau ["ID_TOKO"],
+    "stageId": "BACKLOG" | "CREATIVE" | "PRODUCTION" | "LOGISTICS" | "COMPLETED",
+    "subStatus": "ID_SUBSTATUS",
+    "notes": "Catatan tugas"
+  },
+  "newStore": {
+    "name": "Nama Toko Baru",
+    "am": ""
+  } | null,
+
+  // Wajib diisi jika intent == "FILTER_BOARD"
+  "filter": {
+    "search": "kata kunci",
+    "priority": "ALL" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
+    "picHq": "ALL" | "NAMA PIC",
+    "am": "ALL" | "NAMA AM",
+    "store": "ALL" | "ID_TOKO",
+    "category": "ALL" | "KATEGORI",
+    "quickUrgentOnly": false
+  } | null,
+
+  // Wajib diisi jika intent == "UPDATE_TASK"
+  "update": {
+    "targetQuery": "kata kunci judul task atau #ID",
+    "targetStageId": "COMPLETED" | "CREATIVE" | "PRODUCTION" | "LOGISTICS" | "BACKLOG",
+    "targetSubStatus": "COMPLETED_INSTALLED"
+  } | null
 }
 `.trim();
 
@@ -121,43 +168,28 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
   for (const candidate of CANDIDATE_ENDPOINTS) {
     const endpointUrl = `https://generativelanguage.googleapis.com/${candidate.version}/models/${candidate.model}:generateContent?key=${apiKey}`;
 
-    const requestBody = candidate.version === 'v1'
-      ? {
-          contents: [
+    const requestBody = {
+      contents: [
+        {
+          parts: [
             {
-              parts: [
-                {
-                  text: `${systemInstructionText}\n\nTolong parse percakapan berikut menjadi objek Task JSON (output HANYA JSON murni tanpa pembungkus markdown):\n"${prompt.trim()}"`
-                }
-              ]
+              text: `Tolong parse instruksi/percakapan berikut:\n"${prompt.trim()}"`
             }
-          ],
-          generationConfig: {
-            temperature: 0.1
-          }
+          ]
         }
-      : {
-          contents: [
-            {
-              parts: [
-                {
-                  text: `Tolong parse percakapan berikut menjadi objek Task JSON:\n"${prompt.trim()}"`
-                }
-              ]
-            }
-          ],
-          systemInstruction: {
-            parts: [
-              {
-                text: systemInstructionText
-              }
-            ]
-          },
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.1
+      ],
+      systemInstruction: {
+        parts: [
+          {
+            text: systemInstructionText
           }
-        };
+        ]
+      },
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.1
+      }
+    };
 
     let response: Response | null = null;
     let lastStatus = 0;
@@ -210,10 +242,9 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
           continue; // Retry once
         }
 
-        // Non-503 error (e.g. 404 model not found) or 503 failed after retry -> break to fallback
+        // Non-503 error or 503 failed after retry -> break to fallback
         break;
       } catch (err: unknown) {
-        // Re-throw critical authentication / quota errors directly
         if (err instanceof Error && (err.message.includes('API Key Gemini tidak valid') || err.message.includes('Batas kuota Gemini API tercapai'))) {
           throw err;
         }
@@ -265,29 +296,89 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
     );
   }
 
-  // Normalize and validate parsed JSON into TaskFormData
-  const title = (typeof parsedJson.title === 'string' && parsedJson.title.trim())
-    ? parsedJson.title.trim()
+  // Determine intent
+  const intentRaw = typeof parsedJson.intent === 'string' ? parsedJson.intent.toUpperCase() : 'CREATE_TASK';
+  const intent: 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' =
+    ['FILTER_BOARD', 'UPDATE_TASK'].includes(intentRaw) ? (intentRaw as 'FILTER_BOARD' | 'UPDATE_TASK') : 'CREATE_TASK';
+
+  const explanation = typeof parsedJson.explanation === 'string' ? parsedJson.explanation.trim() : '';
+
+  // 1. FILTER_BOARD intent handling
+  if (intent === 'FILTER_BOARD') {
+    const filterObj = (parsedJson.filter && typeof parsedJson.filter === 'object')
+      ? (parsedJson.filter as Record<string, unknown>)
+      : {};
+
+    return {
+      intent: 'FILTER_BOARD',
+      explanation: explanation || 'Filter board diterapkan',
+      filter: {
+        search: typeof filterObj.search === 'string' ? filterObj.search.trim() : '',
+        priority: typeof filterObj.priority === 'string' ? filterObj.priority : 'ALL',
+        picHq: typeof filterObj.picHq === 'string' ? filterObj.picHq : 'ALL',
+        am: typeof filterObj.am === 'string' ? filterObj.am : 'ALL',
+        store: typeof filterObj.store === 'string' ? filterObj.store : 'ALL',
+        category: typeof filterObj.category === 'string' ? filterObj.category : 'ALL',
+        quickUrgentOnly: Boolean(filterObj.quickUrgentOnly)
+      }
+    };
+  }
+
+  // 2. UPDATE_TASK intent handling
+  if (intent === 'UPDATE_TASK') {
+    const updateObj = (parsedJson.update && typeof parsedJson.update === 'object')
+      ? (parsedJson.update as Record<string, unknown>)
+      : {};
+
+    const targetQuery = typeof updateObj.targetQuery === 'string' ? updateObj.targetQuery.trim() : prompt.trim();
+    let targetStageId: StageId = 'COMPLETED';
+    if (typeof updateObj.targetStageId === 'string' && WTC_CONFIG.STAGES.some(s => s.id === updateObj.targetStageId)) {
+      targetStageId = updateObj.targetStageId as StageId;
+    }
+
+    const targetSubStatus = typeof updateObj.targetSubStatus === 'string' ? updateObj.targetSubStatus : undefined;
+
+    return {
+      intent: 'UPDATE_TASK',
+      explanation: explanation || `Memperbarui task "${targetQuery}"`,
+      update: {
+        targetQuery,
+        targetStageId,
+        targetSubStatus
+      }
+    };
+  }
+
+  // 3. CREATE_TASK intent handling (default)
+  const taskObj = (parsedJson.task && typeof parsedJson.task === 'object')
+    ? (parsedJson.task as Record<string, unknown>)
+    : parsedJson;
+
+  const title = (typeof taskObj.title === 'string' && taskObj.title.trim())
+    ? taskObj.title.trim().toUpperCase()
     : prompt.slice(0, 40).toUpperCase();
 
   // Match PIC
   let picHq = picNames[0] || 'BU EVY';
-  if (typeof parsedJson.picHq === 'string') {
-    const matchedPic = picNames.find(p => p.toLowerCase() === (parsedJson.picHq as string).toLowerCase());
+  if (typeof taskObj.picHq === 'string') {
+    const matchedPic = picNames.find(p => p.toLowerCase() === (taskObj.picHq as string).toLowerCase());
     if (matchedPic) picHq = matchedPic;
   }
 
   // Match Category
   let category = categoriesList[0] || 'Poster';
-  if (typeof parsedJson.category === 'string') {
-    const matchedCat = categoriesList.find(c => c.toLowerCase() === (parsedJson.category as string).toLowerCase());
+  if (typeof taskObj.category === 'string') {
+    const matchedCat = categoriesList.find(c => c.toLowerCase() === (taskObj.category as string).toLowerCase());
     if (matchedCat) category = matchedCat;
   }
 
-  // Match Priority
+  // Match Priority (Default CRITICAL if prompt has urgent cues)
   let priority: Priority = 'MEDIUM';
-  if (typeof parsedJson.priority === 'string') {
-    const pUpper = (parsedJson.priority as string).toUpperCase();
+  const promptLower = prompt.toLowerCase();
+  if (promptLower.includes('urgent') || promptLower.includes('kritis') || promptLower.includes('asap') || promptLower.includes('segera')) {
+    priority = 'CRITICAL';
+  } else if (typeof taskObj.priority === 'string') {
+    const pUpper = (taskObj.priority as string).toUpperCase();
     if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(pUpper)) {
       priority = pUpper as Priority;
     }
@@ -295,19 +386,34 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
 
   // Match Deadline
   let deadline = addWorkingDays(todayIso, 3);
-  if (typeof parsedJson.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsedJson.deadline)) {
-    deadline = parsedJson.deadline;
+  if (typeof taskObj.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(taskObj.deadline)) {
+    deadline = taskObj.deadline;
+  }
+
+  // Match ReminderAt
+  let reminderAt: string | null = null;
+  if (typeof taskObj.reminderAt === 'string') {
+    const remRaw = taskObj.reminderAt.trim();
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(remRaw)) {
+      reminderAt = remRaw.length === 16 ? `${remRaw}:00` : remRaw;
+    }
+  } else if (promptLower.includes('makan siang')) {
+    reminderAt = `${todayIso}T11:30:00`;
+  } else if (promptLower.includes('sebelum pulang') || promptLower.includes('pulang kerja')) {
+    reminderAt = `${todayIso}T16:30:00`;
   }
 
   // Match Stage & SubStatus
   let stageId: StageId = 'CREATIVE';
-  if (typeof parsedJson.stageId === 'string' && WTC_CONFIG.STAGES.some(s => s.id === parsedJson.stageId)) {
-    stageId = parsedJson.stageId as StageId;
+  if (promptLower.includes('desain request') || promptLower.includes('untuk desain') || promptLower.includes('desain')) {
+    stageId = 'CREATIVE';
+  } else if (typeof taskObj.stageId === 'string' && WTC_CONFIG.STAGES.some(s => s.id === taskObj.stageId)) {
+    stageId = taskObj.stageId as StageId;
   }
 
   let subStatus = WTC_CONFIG.SUB_STATUSES.find(s => s.stageId === stageId)?.id || 'IN_DESIGN';
-  if (typeof parsedJson.subStatus === 'string') {
-    const matchedSub = WTC_CONFIG.SUB_STATUSES.find(s => s.id === parsedJson.subStatus);
+  if (typeof taskObj.subStatus === 'string') {
+    const matchedSub = WTC_CONFIG.SUB_STATUSES.find(s => s.id === taskObj.subStatus);
     if (matchedSub) {
       subStatus = matchedSub.id;
       stageId = matchedSub.stageId;
@@ -316,13 +422,30 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
 
   // Match StoreIds
   let storeIds: string[] = ['ALL_STORES'];
-  if (Array.isArray(parsedJson.storeIds) && parsedJson.storeIds.length > 0) {
-    storeIds = parsedJson.storeIds.map(String);
+  if (Array.isArray(taskObj.storeIds) && taskObj.storeIds.length > 0) {
+    storeIds = taskObj.storeIds.map(String);
   }
 
-  const notes = typeof parsedJson.notes === 'string' ? parsedJson.notes.trim() : '';
+  // Match newStore
+  let newStore: { name: string; am?: string } | null = null;
+  const newStoreRaw = parsedJson.newStore as { name?: string; am?: string } | undefined;
+  if (newStoreRaw && typeof newStoreRaw.name === 'string' && newStoreRaw.name.trim() !== '') {
+    const cleanStoreName = newStoreRaw.name.trim();
+    const existing = context.stores.find(s => s.name.toLowerCase() === cleanStoreName.toLowerCase());
+    if (existing) {
+      storeIds = [existing.id];
+    } else {
+      newStore = {
+        name: cleanStoreName,
+        am: newStoreRaw.am || ''
+      };
+      storeIds = [];
+    }
+  }
 
-  return {
+  const notes = typeof taskObj.notes === 'string' ? taskObj.notes.trim() : '';
+
+  const taskData: TaskFormData = {
     title,
     category,
     priority,
@@ -332,6 +455,15 @@ Keluarkan HANYA JSON murni (tanpa markdown, tanpa teks pengantar atau penutup) d
     storeIds,
     stageId,
     subStatus,
-    notes
+    notes,
+    reminderAt,
+    reminderNotified: false
+  };
+
+  return {
+    intent: 'CREATE_TASK',
+    explanation: explanation || 'Task baru berhasil dipersiapkan',
+    task: taskData,
+    newStore
   };
 }
