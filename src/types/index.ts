@@ -151,10 +151,14 @@ export interface AIActionChip {
   };
 }
 
+export type AIExecutionSource = 'LOCAL_FAST' | 'GEMINI_CLOUD';
+
 export interface AICommandResult {
   intent: AICommandIntent;
   explanation: string;
   answer?: string | null;
+  taskIds?: string[] | null; // Array ID task target untuk render mini cards instan
+  executionSource?: AIExecutionSource;
   task?: TaskFormData | null;
   newStore?: { name: string; am?: string } | null;
   filter?: {
