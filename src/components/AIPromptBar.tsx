@@ -16,16 +16,16 @@ import {
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { parseConversationalTask, findMatchingTasks } from '../services/aiTaskService';
 import { getTodayIso } from '../utils/dateUtils';
-import { Task, TaskFormData, StageId, AICommandResult, AIExecutionSource } from '../types';
+import { Task, TaskFormData, StageId, AICommandResult } from '../types';
 
 const EXAMPLE_PROMPTS = [
-  'Ada berapa task telat hari ini?',
-  'Task prioritas urgent yang aktif',
-  'Ringkas kondisi board saat ini',
-  'Filter task bu evy',
+  'Ada berapa task telat hari ini dan siapa saja PIC-nya?',
   'bikin task baru kartu ucapan pic bu evy deadline besok jam 3 sore toko wtc grand mall',
+  'desain request pop promo urgent hari ini selesai untuk desain pic itho',
   'tandai selesai task kartu ucapan lalu bikin task baru poster promo ramadhan',
-  'hapus task flyer opening wtc'
+  'buat new task deadline awal oktober posm karakter jam buat season natal pic bu evy keterangan bikin mock up dlu taruh di backlog',
+  'hapus task flyer opening wtc',
+  'filter task bu evy yang urgent'
 ];
 
 interface CandidateSelectionState {
@@ -42,10 +42,9 @@ interface ZeroMatchState {
   actionType: 'UPDATE' | 'DELETE';
 }
 
-interface AIQueryResultState {
+interface AIAnswerState {
   answer: string;
   taskIds?: string[] | null;
-  executionSource?: AIExecutionSource;
 }
 
 export const AIPromptBar: React.FC = () => {
@@ -81,8 +80,8 @@ export const AIPromptBar: React.FC = () => {
   const [savedKeySuccess, setSavedKeySuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Two-Tier Hybrid Result State
-  const [aiQueryResult, setAiQueryResult] = useState<AIQueryResultState | null>(null);
+  // AI Q&A Answer state with optional taskIds for interactive mini cards
+  const [aiAnswer, setAiAnswer] = useState<AIAnswerState | null>(null);
 
   // Interactive Action Chips states
   const [candidateSelection, setCandidateSelection] = useState<CandidateSelectionState | null>(null);
@@ -96,7 +95,7 @@ export const AIPromptBar: React.FC = () => {
       setTempKey(geminiApiKey);
       setShowKeyInput(!geminiApiKey);
       setErrorMessage(null);
-      setAiQueryResult(null);
+      setAiAnswer(null);
       setCandidateSelection(null);
       setZeroMatchPrompt(null);
     }
@@ -269,8 +268,14 @@ export const AIPromptBar: React.FC = () => {
     if (e) e.preventDefault();
     if (!promptText.trim()) return;
 
+    if (!geminiApiKey && !tempKey.trim()) {
+      setShowKeyInput(true);
+      addToast('Masukkan API Key Gemini terlebih dahulu', 'error');
+      return;
+    }
+
     setErrorMessage(null);
-    setAiQueryResult(null);
+    setAiAnswer(null);
     setCandidateSelection(null);
     setZeroMatchPrompt(null);
     setIsLoading(true);
@@ -290,20 +295,13 @@ export const AIPromptBar: React.FC = () => {
         geminiApiKey || tempKey.trim()
       );
 
-      const isLocal = parsed.executionSource === 'LOCAL_FAST';
-      const sourceTag = isLocal ? '⚡ Kilat Lokal (0.01s)' : '✨ Gemini AI';
-
       // 0. ANSWER_QUERY intent
       if (parsed.intent === 'ANSWER_QUERY') {
-        setAiQueryResult({
-          answer: parsed.answer || parsed.explanation || 'Informasi siap.',
-          taskIds: parsed.taskIds || null,
-          executionSource: parsed.executionSource || 'LOCAL_FAST'
+        setAiAnswer({
+          answer: parsed.answer || parsed.explanation || 'Informasi berhasil didapatkan.',
+          taskIds: parsed.taskIds || null
         });
-        addToast(
-          isLocal ? '⚡ Kilat Lokal (0.01s): Jawaban siap' : '✨ Gemini AI: Pertanyaan berhasil dijawab',
-          'info'
-        );
+        addToast('🤖 Pertanyaan berhasil dijawab AI', 'info');
         return;
       }
 
@@ -327,7 +325,7 @@ export const AIPromptBar: React.FC = () => {
         closeAiPrompt();
         setPromptText('');
         setErrorMessage(null);
-        addToast(`🔍 ${sourceTag}: ${parsed.explanation || 'Filter board diterapkan'}`, 'info');
+        addToast(`🔍 Filter diterapkan: ${parsed.explanation || 'Tampilan board diperbarui'}`, 'info');
         return;
       }
 
@@ -544,7 +542,7 @@ export const AIPromptBar: React.FC = () => {
                   Conversational AI Assistant & Command Bar
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-medium">
-                  Two-Tier Engine
+                  Gemini Flash
                 </span>
                 {activeWorkspace === 'Personal Project' && (
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-medium">
@@ -553,7 +551,7 @@ export const AIPromptBar: React.FC = () => {
                 )}
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Router Cepat Lokal (0–3ms) + Gemini Cloud Fallback · Anti-Slop
+                Tanya status board, cari/filter task, atau buat task baru secara langsung
               </p>
             </div>
           </div>
@@ -728,7 +726,7 @@ export const AIPromptBar: React.FC = () => {
               <div className="flex items-center justify-between text-xs">
                 <label className="font-medium text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
                   <Key className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Google Gemini API Key (Untuk Cloud Mode)</span>
+                  <span>Google Gemini API Key</span>
                 </label>
                 <a
                   href="https://aistudio.google.com/app/apikey"
@@ -777,14 +775,14 @@ export const AIPromptBar: React.FC = () => {
               disabled={isLoading}
               onChange={(e) => setPromptText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ketik pertanyaan analitis, perintah filter, atau instruksi task..."
+              placeholder="Contoh: buat new task deadline awal oktober posm karakter jam buat season natal pic bu evy keterangan bikin mock up dlu taruh di backlog..."
               className="w-full p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-blue-500 dark:focus:border-blue-500 resize-none transition shadow-inner leading-relaxed"
             />
 
             {isLoading && (
               <div className="absolute inset-0 bg-white/70 dark:bg-black/70 backdrop-blur-xs rounded-xl flex items-center justify-center gap-2.5 text-xs font-medium text-blue-600 dark:text-blue-400 animate-in fade-in duration-150">
                 <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-                <span>Menganalisis perintah...</span>
+                <span>Sedang menganalisis prompt dengan Gemini AI...</span>
               </div>
             )}
           </div>
@@ -795,7 +793,7 @@ export const AIPromptBar: React.FC = () => {
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-rose-500" />
               <div className="flex-1 space-y-1">
                 <div className="font-semibold text-rose-700 dark:text-rose-300">
-                  Kendala Eksekusi:
+                  Kendala Menghubungi Gemini AI:
                 </div>
                 <div className="font-mono text-[11px] whitespace-pre-wrap leading-relaxed opacity-95">
                   {errorMessage}
@@ -890,30 +888,24 @@ export const AIPromptBar: React.FC = () => {
             </div>
           )}
 
-          {/* AI Q&A Answer Box & Interactive Glassmorphic Cards Grid (Anti-Slop) */}
-          {aiQueryResult && (
-            <div className="p-4 rounded-xl bg-zinc-900/90 dark:bg-[#101014] border border-zinc-200 dark:border-zinc-800 space-y-3 animate-in fade-in slide-in-from-top-1 shadow-md">
+          {/* AI Q&A Answer Box & Interactive Glassmorphic Cards Grid */}
+          {aiAnswer && (
+            <div className="p-4 rounded-xl bg-blue-500/10 dark:bg-blue-500/10 border border-blue-500/25 space-y-3 animate-in fade-in slide-in-from-top-1 shadow-md">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded-lg bg-blue-500/20 text-blue-500 flex items-center justify-center border border-blue-500/30">
                     <Sparkles className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
                   </div>
                   <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Hasil Analisis Board
+                    Jawaban AI Assistant:
                   </span>
-                  {aiQueryResult.executionSource === 'LOCAL_FAST' ? (
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 font-semibold flex items-center gap-1">
-                      ⚡ Kilat Lokal (0.01s)
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 font-semibold flex items-center gap-1">
-                      ✨ Gemini AI
-                    </span>
-                  )}
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 font-medium">
+                    Gemini Flash
+                  </span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setAiQueryResult(null)}
+                  onClick={() => setAiAnswer(null)}
                   className="p-1 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition"
                   title="Tutup jawaban"
                 >
@@ -923,15 +915,15 @@ export const AIPromptBar: React.FC = () => {
 
               {/* Anti-Slop: Direct, concise text */}
               <div className="text-xs sm:text-sm text-zinc-800 dark:text-zinc-200 font-medium pl-8">
-                {aiQueryResult.answer}
+                {aiAnswer.answer}
               </div>
 
               {/* Interactive Glassmorphic Cards Grid */}
-              {aiQueryResult.taskIds && aiQueryResult.taskIds.length > 0 && (
+              {aiAnswer.taskIds && aiAnswer.taskIds.length > 0 && (
                 <div className="pl-8 pt-1">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
                     {tasks
-                      .filter(t => aiQueryResult.taskIds?.includes(t.id))
+                      .filter(t => aiAnswer.taskIds?.includes(t.id))
                       .map(t => (
                         <div
                           key={t.id}

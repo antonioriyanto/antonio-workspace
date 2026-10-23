@@ -127,7 +127,7 @@ export function findMatchingTasks(query: string, tasks: Task[]): FuzzyMatchResul
 
 /**
  * Helper to build TaskFormData with workspace-aware defaults,
- * smart alarm rollover, and new store detection.
+ * smart alarm rollover, POSM mapping, backlog routing, and new store detection.
  */
 export function buildTaskFormData(
   taskObj: Record<string, unknown> | undefined,
@@ -138,6 +138,7 @@ export function buildTaskFormData(
   const isPersonal = context.activeWorkspace === 'Personal Project';
   const picNames = context.pics.map(p => p.name);
   const categoriesList = context.categories;
+  const promptLower = prompt.toLowerCase();
 
   const rawObj = taskObj || {};
 
@@ -147,7 +148,8 @@ export function buildTaskFormData(
     : prompt.slice(0, 40).toUpperCase();
 
   title = title.replace(/^(?:LALU|KEMUDIAN|SETELAH ITU)\s+(?:BIKIN|BUAT|TAMBAH)\s+(?:TASK\s+)?/i, '').trim();
-  if (!title) title = 'UNTITLED TASK';
+  title = title.replace(/^(?:BUAT|BIKIN|TAMBAH)\s+(?:NEW\s+TASK\s+|TASK\s+BARU\s+|TASK\s+)/i, '').trim();
+  if (!title) title = 'TASK BARU';
 
   // Workspace-Aware Default PIC
   let defaultPic = isPersonal
@@ -162,22 +164,36 @@ export function buildTaskFormData(
     } else {
       picHq = rawObj.picHq.trim().toUpperCase();
     }
+  } else {
+    // Check if prompt directly names a PIC (e.g. "pic bu evy")
+    const matchedPic = picNames.find(p => promptLower.includes(p.toLowerCase()));
+    if (matchedPic) picHq = matchedPic;
   }
 
-  // Workspace-Aware Default Category
+  // Workspace-Aware Default Category & POSM mapping
   let defaultCategory = isPersonal
     ? (categoriesList.find(c => c.toLowerCase() === 'digital') || 'Digital')
     : (categoriesList[0] || 'Poster');
 
   let category = defaultCategory;
   if (typeof rawObj.category === 'string' && rawObj.category.trim()) {
-    const matchedCat = categoriesList.find(c => c.toLowerCase() === (rawObj.category as string).toLowerCase().trim());
-    if (matchedCat) category = matchedCat;
+    const rawCat = rawObj.category.trim().toLowerCase();
+    const matchedCat = categoriesList.find(c => {
+      const cLow = c.toLowerCase();
+      return cLow === rawCat || cLow.includes(rawCat) || rawCat.includes(cLow);
+    });
+    if (matchedCat) {
+      category = matchedCat;
+    } else {
+      category = rawObj.category.trim();
+    }
+  } else if (promptLower.includes('posm')) {
+    const posmCat = categoriesList.find(c => c.toLowerCase().includes('posm'));
+    if (posmCat) category = posmCat;
   }
 
   // Priority
   let priority: Priority = 'MEDIUM';
-  const promptLower = prompt.toLowerCase();
   if (promptLower.includes('urgent') || promptLower.includes('kritis') || promptLower.includes('asap') || promptLower.includes('segera')) {
     priority = 'CRITICAL';
   } else if (typeof rawObj.priority === 'string') {
@@ -216,15 +232,27 @@ export function buildTaskFormData(
     }
   }
 
-  // Stage & SubStatus
+  // Stage & SubStatus mapping (explicit check for "taruh di backlog")
   let stageId: StageId = 'CREATIVE';
-  if (promptLower.includes('desain request') || promptLower.includes('untuk desain') || promptLower.includes('desain')) {
+  let subStatus = 'IN_DESIGN';
+
+  if (
+    promptLower.includes('taruh di backlog') ||
+    promptLower.includes('ke backlog') ||
+    promptLower.includes('di backlog') ||
+    promptLower.includes('masukkan ke backlog') ||
+    rawObj.stageId === 'BACKLOG'
+  ) {
+    stageId = 'BACKLOG';
+    subStatus = 'AWAITING_ASSETS';
+  } else if (promptLower.includes('desain request') || promptLower.includes('untuk desain') || promptLower.includes('desain')) {
     stageId = 'CREATIVE';
+    subStatus = 'IN_DESIGN';
   } else if (typeof rawObj.stageId === 'string' && WTC_CONFIG.STAGES.some(s => s.id === rawObj.stageId)) {
     stageId = rawObj.stageId as StageId;
+    subStatus = WTC_CONFIG.SUB_STATUSES.find(s => s.stageId === stageId)?.id || 'IN_DESIGN';
   }
 
-  let subStatus = WTC_CONFIG.SUB_STATUSES.find(s => s.stageId === stageId)?.id || 'IN_DESIGN';
   if (typeof rawObj.subStatus === 'string') {
     const matchedSub = WTC_CONFIG.SUB_STATUSES.find(s => s.id === rawObj.subStatus);
     if (matchedSub) {
@@ -256,7 +284,14 @@ export function buildTaskFormData(
     }
   }
 
-  const notes = typeof rawObj.notes === 'string' ? rawObj.notes.trim() : '';
+  // Notes extraction (including "keterangan ...")
+  let notes = typeof rawObj.notes === 'string' ? rawObj.notes.trim() : '';
+  if (!notes) {
+    const ketMatch = prompt.match(/keterangan\s+(.*?)(?:\s+taruh\s+di\s+backlog|\s*$)/i);
+    if (ketMatch && ketMatch[1].trim()) {
+      notes = ketMatch[1].trim();
+    }
+  }
 
   const taskData: TaskFormData = {
     title,
@@ -277,292 +312,14 @@ export function buildTaskFormData(
 }
 
 /**
- * LAYER 1: Local Deterministic Router (0–3ms in-memory execution, 100% free).
- * Evaluates queries and commands instantaneously in-memory without calling Gemini API:
- * 1. Analytical Q&A (overdue, due today, urgent, PIC tasks, stage tasks, board summary)
- * 2. Deterministic board filters (filter by PIC, urgent, store, category, clear filter)
- * 3. Direct ID mutations (update stage or delete tasks with explicit #T... IDs)
- */
-export function routeLocalFast(
-  prompt: string,
-  context: AIParsingContext
-): AICommandResult | null {
-  const p = prompt.trim().toLowerCase();
-  if (!p) return null;
-
-  const todayIso = context.todayIso || getTodayIso();
-  const tasks = context.tasks || [];
-  const activeTasks = tasks.filter(t => t.stageId !== 'COMPLETED');
-
-  // 1. Analytical Q&A: Overdue tasks
-  if (
-    /\b(?:overdue|telat|terlambat|lewat deadline)\b/i.test(p) &&
-    !/\b(?:filter|tampilkan|cari)\b/i.test(p)
-  ) {
-    const overdue = activeTasks.filter(t => t.deadline && t.deadline < todayIso);
-    return {
-      intent: 'ANSWER_QUERY',
-      explanation: 'Analisis task overdue (Local)',
-      answer: overdue.length > 0
-        ? `${overdue.length} task overdue ditemukan:`
-        : 'Tidak ada task overdue saat ini.',
-      taskIds: overdue.map(t => t.id),
-      executionSource: 'LOCAL_FAST'
-    };
-  }
-
-  // 2. Analytical Q&A: Due today tasks
-  if (
-    /\b(?:deadline hari ini|hari ini deadline|jatuh tempo hari ini)\b/i.test(p) &&
-    !/\b(?:filter|cari)\b/i.test(p)
-  ) {
-    const dueToday = activeTasks.filter(t => t.deadline === todayIso);
-    return {
-      intent: 'ANSWER_QUERY',
-      explanation: 'Analisis task deadline hari ini (Local)',
-      answer: dueToday.length > 0
-        ? `${dueToday.length} task deadline hari ini:`
-        : 'Tidak ada task deadline hari ini.',
-      taskIds: dueToday.map(t => t.id),
-      executionSource: 'LOCAL_FAST'
-    };
-  }
-
-  // 3. Analytical Q&A: Urgent / Critical tasks
-  if (
-    /\b(?:urgent|kritis|prioritas tinggi|critical)\b/i.test(p) &&
-    !/\b(?:filter|cari|tampilkan)\b/i.test(p) &&
-    /\b(?:berapa|ada berapa|cek|lihat|status|daftar)\b/i.test(p)
-  ) {
-    const urgent = activeTasks.filter(t => t.priority === 'CRITICAL' || t.priority === 'HIGH');
-    return {
-      intent: 'ANSWER_QUERY',
-      explanation: 'Analisis task urgent (Local)',
-      answer: urgent.length > 0
-        ? `${urgent.length} task prioritas tinggi/kritis aktif:`
-        : 'Tidak ada task urgent saat ini.',
-      taskIds: urgent.map(t => t.id),
-      executionSource: 'LOCAL_FAST'
-    };
-  }
-
-  // 4. Analytical Q&A: Board summary / status
-  if (
-    /\b(?:ringkas|rekap|kondisi|status|resume)\s*(?:board|kanban|semua task|keseluruhan)?\b/i.test(p) &&
-    !/\b(?:filter|cari)\b/i.test(p)
-  ) {
-    const overdueCount = activeTasks.filter(t => t.deadline && t.deadline < todayIso).length;
-    const criticalCount = activeTasks.filter(t => t.priority === 'CRITICAL').length;
-    const completedCount = tasks.filter(t => t.stageId === 'COMPLETED').length;
-    return {
-      intent: 'ANSWER_QUERY',
-      explanation: 'Ringkasan board (Local)',
-      answer: `Total ${activeTasks.length} task aktif (${overdueCount} overdue, ${criticalCount} kritis, ${completedCount} selesai).`,
-      taskIds: activeTasks.slice(0, 6).map(t => t.id),
-      executionSource: 'LOCAL_FAST'
-    };
-  }
-
-  // 5. Analytical Q&A: Specific PIC query
-  for (const pic of context.pics) {
-    const picLower = pic.name.toLowerCase();
-    if (
-      p.includes(picLower) &&
-      /\b(?:task|tugas|kerjaan|berapa|ada berapa)\b/i.test(p) &&
-      !/\b(?:filter|bikin|buat|tambah)\b/i.test(p)
-    ) {
-      const picTasks = activeTasks.filter(t => t.picHq.toLowerCase() === picLower);
-      return {
-        intent: 'ANSWER_QUERY',
-        explanation: `Analisis task PIC ${pic.name} (Local)`,
-        answer: picTasks.length > 0
-          ? `${picTasks.length} task aktif untuk ${pic.name}:`
-          : `Tidak ada task aktif untuk ${pic.name}.`,
-        taskIds: picTasks.map(t => t.id),
-        executionSource: 'LOCAL_FAST'
-      };
-    }
-  }
-
-  // 6. Analytical Q&A: Specific Stage query
-  for (const stage of WTC_CONFIG.STAGES) {
-    const stageIdLower = stage.id.toLowerCase();
-    const stageTitleLower = stage.title.toLowerCase();
-    if (
-      (p.includes(stageIdLower) || p.includes(stageTitleLower)) &&
-      /\b(?:task|tugas|berapa|ada berapa)\b/i.test(p) &&
-      !/\b(?:filter|pindahkan|move|ubah|ke)\b/i.test(p)
-    ) {
-      const stageTasks = tasks.filter(t => t.stageId === stage.id);
-      return {
-        intent: 'ANSWER_QUERY',
-        explanation: `Task di stage ${stage.title} (Local)`,
-        answer: stageTasks.length > 0
-          ? `${stageTasks.length} task di stage ${stage.title}:`
-          : `Tidak ada task di stage ${stage.title}.`,
-        taskIds: stageTasks.map(t => t.id),
-        executionSource: 'LOCAL_FAST'
-      };
-    }
-  }
-
-  // 7. Deterministic Filters (FILTER_BOARD)
-  if (/\b(?:filter|tampilkan hanya|saring)\b/i.test(p) || p === 'reset filter' || p === 'hapus filter') {
-    // 7.1 Reset filter
-    if (/\b(?:reset|hapus|clear|bersihkan|semua)\b/i.test(p)) {
-      return {
-        intent: 'FILTER_BOARD',
-        explanation: 'Filter board di-reset',
-        filter: {
-          search: '',
-          priority: 'ALL',
-          picHq: 'ALL',
-          am: 'ALL',
-          store: 'ALL',
-          category: 'ALL',
-          quickUrgentOnly: false
-        },
-        executionSource: 'LOCAL_FAST'
-      };
-    }
-
-    // 7.2 Urgent filter
-    if (/\b(?:urgent|kritis|asap)\b/i.test(p)) {
-      return {
-        intent: 'FILTER_BOARD',
-        explanation: 'Filter task urgent aktif',
-        filter: {
-          search: '',
-          priority: 'CRITICAL',
-          quickUrgentOnly: true
-        },
-        executionSource: 'LOCAL_FAST'
-      };
-    }
-
-    // 7.3 PIC filter
-    for (const pic of context.pics) {
-      if (p.includes(pic.name.toLowerCase())) {
-        return {
-          intent: 'FILTER_BOARD',
-          explanation: `Filter task ${pic.name}`,
-          filter: {
-            search: '',
-            priority: 'ALL',
-            picHq: pic.name
-          },
-          executionSource: 'LOCAL_FAST'
-        };
-      }
-    }
-
-    // 7.4 Category filter
-    for (const cat of context.categories) {
-      if (p.includes(cat.toLowerCase())) {
-        return {
-          intent: 'FILTER_BOARD',
-          explanation: `Filter kategori ${cat}`,
-          filter: {
-            search: '',
-            category: cat
-          },
-          executionSource: 'LOCAL_FAST'
-        };
-      }
-    }
-
-    // 7.5 Store filter
-    for (const st of context.stores) {
-      if (p.includes(st.name.toLowerCase()) || p.includes(st.id.toLowerCase())) {
-        return {
-          intent: 'FILTER_BOARD',
-          explanation: `Filter toko ${st.name}`,
-          filter: {
-            search: '',
-            store: st.id
-          },
-          executionSource: 'LOCAL_FAST'
-        };
-      }
-    }
-  }
-
-  // 8. Deterministic Task Mutation by Explicit ID (UPDATE_TASK or DELETE_TASK)
-  const idMatch = p.match(/#?(t\d{2,4})\b/i);
-  if (idMatch) {
-    const rawId = idMatch[1].toUpperCase();
-    const targetTask = tasks.find(t => t.id.toUpperCase() === rawId);
-
-    if (targetTask) {
-      // 8.1 Delete task
-      if (/\b(?:hapus|delete|buang|hilangkan)\b/i.test(p)) {
-        return {
-          intent: 'DELETE_TASK',
-          explanation: `Hapus task #${targetTask.id} (${targetTask.title})`,
-          delete: {
-            targetQuery: targetTask.id,
-            taskId: targetTask.id
-          },
-          executionSource: 'LOCAL_FAST'
-        };
-      }
-
-      // 8.2 Mark completed
-      if (/\b(?:selesai|completed|done|beres|tandai selesai)\b/i.test(p)) {
-        return {
-          intent: 'UPDATE_TASK',
-          explanation: `Pindahkan #${targetTask.id} ke Selesai`,
-          update: {
-            targetQuery: targetTask.id,
-            targetStageId: 'COMPLETED',
-            targetSubStatus: 'COMPLETED_INSTALLED'
-          },
-          executionSource: 'LOCAL_FAST'
-        };
-      }
-
-      // 8.3 Move to specific stage
-      for (const st of WTC_CONFIG.STAGES) {
-        if (p.includes(st.id.toLowerCase()) || p.includes(st.title.toLowerCase())) {
-          return {
-            intent: 'UPDATE_TASK',
-            explanation: `Pindahkan #${targetTask.id} ke ${st.title}`,
-            update: {
-              targetQuery: targetTask.id,
-              targetStageId: st.id
-            },
-            executionSource: 'LOCAL_FAST'
-          };
-        }
-      }
-    }
-  }
-
-  // No deterministic match found -> return null to fallback to Layer 2 Gemini
-  return null;
-}
-
-/**
- * Two-Tier Hybrid AI Assistant Engine for Antonio Riyanto Workspace.
- * Layer 1: Local Deterministic Router (0–3ms in-memory execution, 100% free)
- * Layer 2: Gemini Cloud Fallback with Anti-Slop enforcement & taskIds optimization
+ * Context-Aware Assistant & Universal Intent Parser for Antonio Riyanto Workspace.
+ * Powered 100% by Google Gemini Flash with Anti-Slop enforcement & structured mini cards.
  */
 export async function parseConversationalTask(
   prompt: string,
   context: AIParsingContext,
   customApiKey?: string
 ): Promise<AICommandResult> {
-  // =========================================================================
-  // LAYER 1: Local Deterministic Router (0–3ms latency, zero API tokens)
-  // =========================================================================
-  const localFastResult = routeLocalFast(prompt, context);
-  if (localFastResult) {
-    return localFastResult;
-  }
-
-  // =========================================================================
-  // LAYER 2: Gemini Cloud Fallback
-  // =========================================================================
   const apiKey =
     customApiKey?.trim() ||
     (typeof window !== 'undefined' ? localStorage.getItem('WTC_GEMINI_API_KEY')?.trim() : '') ||
@@ -598,6 +355,11 @@ export async function parseConversationalTask(
 Anda adalah Context-Aware AI Assistant & Universal Command Parser untuk aplikasi Kanban 'Antonio Riyanto Workspace'.
 Tugas Anda membaca instruksi atau pertanyaan percakapan dari pengguna, lalu mengklasifikasikan dan mengonversinya ke dalam salah satu dari 5 INTENT:
 
+ATURAN PRIORITAS MUTLAK (INTENT DISAMBIGUATION):
+- Jika prompt mengandung kata "buat", "bikin", "tambah", "new task", "create", maka intent WAJIB "CREATE_TASK", jangan pernah diartikan sebagai query pencarian/ANSWER_QUERY meskipun menyebut nama stage, kata "task", atau nama PIC!
+- Contoh: "buat new task deadline awal oktober posm karakter jam buat season natal pic bu evy keterangan bikin mock up dlu taruh di backlog" -> WAJIB intent "CREATE_TASK"!
+- Jika pada CREATE_TASK terdapat instruksi seperti "taruh di backlog", "masukkan ke backlog", atau "di backlog" -> wajib set stageId: "BACKLOG", subStatus: "AWAITING_ASSETS".
+
 ANTI-SLOP MANIFESTO:
 1. ZERO CONVERSATIONAL FLUFF (NO META-TALK):
    - Dilarang keras menggunakan kata pembuka klise seperti: "Tentu, saya bantu...", "Sebagai asisten AI...", "Berikut adalah daftar task yang Anda minta:".
@@ -612,7 +374,7 @@ ANTI-SLOP MANIFESTO:
    - Wajib mengisi field "taskIds" dengan array ID task relevan (contoh: ["T101", "T102"]).
 
 2. "CREATE_TASK" : Membuat task baru dari instruksi percakapan.
-   - Contoh: "Bikin task baru kartu ucapan pic bu evy deadline besok".
+   - Contoh: "Bikin task baru kartu ucapan pic bu evy deadline besok", "buat new task ... taruh di backlog".
 
 3. "FILTER_BOARD" : Memfilter tampilan kanban board / sheet.
    - PENTING (SEMANTIC FILTER GUARDRAIL):
@@ -696,7 +458,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
   "task": {
     "title": "Judul singkat jelas dalam HURUF KAPITAL",
     "picHq": "Nama PIC cocok dari daftar",
-    "category": "Kategori yang cocok",
+    "category": "Kategori yang cocok (misal Print/POSM)",
     "priority": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
     "dateCreated": "${todayIso}",
     "deadline": "YYYY-MM-DD",
@@ -878,12 +640,21 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
     );
   }
 
-  // Determine intent
+  // Determine intent (with priority check)
   const intentRaw = typeof parsedJson.intent === 'string' ? parsedJson.intent.toUpperCase() : 'CREATE_TASK';
-  const intent: 'ANSWER_QUERY' | 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'DELETE_TASK' =
+  let intent: 'ANSWER_QUERY' | 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'DELETE_TASK' =
     ['ANSWER_QUERY', 'FILTER_BOARD', 'UPDATE_TASK', 'DELETE_TASK'].includes(intentRaw)
       ? (intentRaw as 'ANSWER_QUERY' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'DELETE_TASK')
       : 'CREATE_TASK';
+
+  // Safeguard: If prompt clearly contains creation keywords, force CREATE_TASK
+  const promptLower = prompt.toLowerCase();
+  if (
+    intent === 'ANSWER_QUERY' &&
+    /\b(?:buat|bikin|tambah|new task|create)\b/i.test(promptLower)
+  ) {
+    intent = 'CREATE_TASK';
+  }
 
   const explanation = typeof parsedJson.explanation === 'string' ? parsedJson.explanation.trim() : '';
 
@@ -906,8 +677,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
         intent: 'CREATE_TASK',
         explanation: typeof chObj.explanation === 'string' ? chObj.explanation : 'Membuat task baru lanjutan',
         task: built.task,
-        newStore: built.newStore,
-        executionSource: 'GEMINI_CLOUD'
+        newStore: built.newStore
       };
     }
   } else {
@@ -920,8 +690,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
         intent: 'CREATE_TASK',
         explanation: `Lanjutan: buat task "${built.task.title}"`,
         task: built.task,
-        newStore: built.newStore,
-        executionSource: 'GEMINI_CLOUD'
+        newStore: built.newStore
       };
     }
   }
@@ -936,8 +705,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
       intent: 'ANSWER_QUERY',
       explanation: explanation || 'Menjawab pertanyaan board',
       answer: answerText,
-      taskIds,
-      executionSource: 'GEMINI_CLOUD'
+      taskIds
     };
   }
 
@@ -973,8 +741,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
         store: typeof filterObj.store === 'string' ? filterObj.store : 'ALL',
         category: typeof filterObj.category === 'string' ? filterObj.category : 'ALL',
         quickUrgentOnly: quickUrgent
-      },
-      executionSource: 'GEMINI_CLOUD'
+      }
     };
   }
 
@@ -997,8 +764,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
         targetQuery,
         taskId
       },
-      chainedAction,
-      executionSource: 'GEMINI_CLOUD'
+      chainedAction
     };
   }
 
@@ -1027,8 +793,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
         targetStageId,
         targetSubStatus
       },
-      chainedAction,
-      executionSource: 'GEMINI_CLOUD'
+      chainedAction
     };
   }
 
@@ -1044,7 +809,6 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
     explanation: explanation || 'Task baru berhasil dipersiapkan',
     task: built.task,
     newStore: built.newStore,
-    chainedAction,
-    executionSource: 'GEMINI_CLOUD'
+    chainedAction
   };
 }
