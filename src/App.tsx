@@ -10,6 +10,7 @@ import { DirectoryModal } from './components/DirectoryModal';
 import { CloudModal } from './components/CloudModal';
 import { AIPromptBar } from './components/AIPromptBar';
 import { RecycleBinModal } from './components/RecycleBinModal';
+import { ChessPanel } from './components/chess/ChessPanel';
 import { ToastContainer } from './components/ToastContainer';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
 import { useReminderEngine } from './hooks/useReminderEngine';
@@ -26,7 +27,8 @@ export const App: React.FC = () => {
     closeCloudModal,
     closeRecycleBin,
     closeAiPrompt,
-    openAiPrompt
+    openAiPrompt,
+    closeChessPanel
   } = useWorkspaceStore();
 
   useEffect(() => {
@@ -51,6 +53,7 @@ export const App: React.FC = () => {
         closeCloudModal();
         closeRecycleBin();
         closeAiPrompt();
+        closeChessPanel();
       }
     };
 
@@ -64,7 +67,8 @@ export const App: React.FC = () => {
     closeCloudModal,
     closeRecycleBin,
     closeAiPrompt,
-    openAiPrompt
+    openAiPrompt,
+    closeChessPanel
   ]);
 
   return (
@@ -90,6 +94,7 @@ export const App: React.FC = () => {
       <CloudModal />
       <AIPromptBar />
       <RecycleBinModal />
+      <ChessPanel />
 
       {/* Toast Notifications */}
       <ToastContainer />

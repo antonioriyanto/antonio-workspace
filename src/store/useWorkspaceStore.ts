@@ -64,6 +64,10 @@ interface WorkspaceStoreState {
   isCloudModalOpen: boolean;
   isRecycleBinOpen: boolean;
   isAiPromptOpen: boolean;
+  isChessPanelOpen: boolean;
+  openChessPanel: () => void;
+  closeChessPanel: () => void;
+  toggleChessPanel: () => void;
 
   // Drag and drop
   draggedTaskId: string | null;
@@ -303,6 +307,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     isCloudModalOpen: false,
     isRecycleBinOpen: false,
     isAiPromptOpen: false,
+    isChessPanelOpen: false,
 
     draggedTaskId: null,
     toasts: [],
@@ -400,6 +405,11 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     // AI actions
     openAiPrompt: () => set({ isAiPromptOpen: true }),
     closeAiPrompt: () => set({ isAiPromptOpen: false }),
+
+    // Chess panel actions
+    openChessPanel: () => set({ isChessPanelOpen: true }),
+    closeChessPanel: () => set({ isChessPanelOpen: false }),
+    toggleChessPanel: () => set(state => ({ isChessPanelOpen: !state.isChessPanelOpen })),
     setGeminiApiKey: (key: string) => {
       const cleanKey = key.trim();
       if (typeof window !== 'undefined') {

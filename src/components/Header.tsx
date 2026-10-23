@@ -31,7 +31,9 @@ export const Header: React.FC = () => {
     openCloudModal,
     openAiPrompt,
     openRecycleBin,
-    deletedTasks
+    deletedTasks,
+    toggleChessPanel,
+    isChessPanelOpen
   } = useWorkspaceStore();
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -196,6 +198,31 @@ export const Header: React.FC = () => {
               </span>
             )}
           </button>
+
+          {/* Zen Break Chess Button (Khusus Personal Project) */}
+          {activeWorkspace === 'Personal Project' && (
+            <button
+              type="button"
+              onClick={toggleChessPanel}
+              className={`relative p-1.5 rounded-lg border transition flex items-center justify-center ${
+                isChessPanelOpen
+                  ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 shadow-sm'
+                  : 'glass-control text-zinc-400 hover:text-zinc-100 hover:border-zinc-700'
+              }`}
+              title="Zen Break: Main Catur (Khusus Personal Project)"
+            >
+              {/* Icon Pion Catur dengan background kotak-kotak catur */}
+              <div className="w-5 h-5 rounded flex items-center justify-center relative overflow-hidden bg-zinc-800 border border-zinc-700/60">
+                <div className="absolute inset-0 opacity-25 grid grid-cols-2 grid-rows-2">
+                  <div className="bg-zinc-100 dark:bg-zinc-300" />
+                  <div className="bg-zinc-700 dark:bg-zinc-900" />
+                  <div className="bg-zinc-700 dark:bg-zinc-900" />
+                  <div className="bg-zinc-100 dark:bg-zinc-300" />
+                </div>
+                <span className="text-xs select-none relative z-10 leading-none">♟</span>
+              </div>
+            </button>
+          )}
 
           {/* Theme Switcher */}
           <div className="inline-flex rounded-lg p-0.5 glass-control" role="group">
