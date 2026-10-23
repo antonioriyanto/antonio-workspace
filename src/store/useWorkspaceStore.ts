@@ -88,8 +88,11 @@ interface WorkspaceStoreState {
   closeAiPrompt: () => void;
   setGeminiApiKey: (key: string) => void;
   addAIActionLog: (log: Omit<AIActionLog, 'id' | 'timestamp' | 'isReverted'>) => string;
+  addAiActionLog: (log: Omit<AIActionLog, 'id' | 'timestamp' | 'isReverted'>) => string;
   revertAIAction: (logId: string) => void;
+  undoAiAction: (logId: string) => void;
   clearAIActionLogs: () => void;
+  clearAiActionLogs: () => void;
 
   // Task actions
   openTaskModal: (taskId?: string | null, prefillData?: TaskFormData | null) => void;
@@ -446,6 +449,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       }
 
       let updatedTasks = state.tasks;
+      let updatedDeletedTasks = state.deletedTasks || [];
       const nowIso = new Date().toISOString();
 
       if (targetLog.type === 'UPDATE_STAGE' && targetLog.taskId && targetLog.prevStageId) {
@@ -460,6 +464,13 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           }
           return t;
         });
+      } else if (targetLog.type === 'DELETE_TASK' && targetLog.taskId) {
+        // Restore soft-deleted task from deletedTasks back to tasks
+        const taskToRestore = updatedDeletedTasks.find(t => t.id === targetLog.taskId);
+        if (taskToRestore) {
+          updatedDeletedTasks = updatedDeletedTasks.filter(t => t.id !== targetLog.taskId);
+          updatedTasks = [taskToRestore, ...updatedTasks];
+        }
       }
 
       // Mark log as reverted
@@ -473,7 +484,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: updatedTasks,
-        deletedTasks: state.deletedTasks || [],
+        deletedTasks: updatedDeletedTasks,
         aiActionLogs: updatedLogs,
         stores: state.stores,
         pics: state.pics,
@@ -484,7 +495,12 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       };
 
       persistWorkspaceData(updatedData);
-      set({ tasks: updatedTasks, aiActionLogs: updatedLogs, lastModified: nowIso });
+      set({
+        tasks: updatedTasks,
+        deletedTasks: updatedDeletedTasks,
+        aiActionLogs: updatedLogs,
+        lastModified: nowIso
+      });
       get().addToast(`Aksi "${targetLog.description}" berhasil dibatalkan`, 'info');
       scheduleAutoPush();
     },
@@ -508,6 +524,10 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       set({ aiActionLogs: updatedLogs });
       get().addToast('Riwayat aksi AI berhasil dibersihkan', 'info');
     },
+
+    addAiActionLog: (logData) => get().addAIActionLog(logData),
+    undoAiAction: (logId) => get().revertAIAction(logId),
+    clearAiActionLogs: () => get().clearAIActionLogs(),
 
     // Recycle bin actions
     openRecycleBin: () => set({ isRecycleBinOpen: true }),

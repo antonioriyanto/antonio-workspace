@@ -134,7 +134,9 @@ export interface AIParsedTaskResult {
   newStore?: { name: string; am?: string } | null;
 }
 
-export type AICommandIntent = 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'ANSWER_QUERY';
+export type AIActionType = 'UPDATE_STAGE' | 'CREATE_TASK' | 'FILTER_BOARD' | 'DELETE_TASK';
+
+export type AICommandIntent = 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'DELETE_TASK' | 'ANSWER_QUERY';
 
 export interface AICommandResult {
   intent: AICommandIntent;
@@ -156,12 +158,17 @@ export interface AICommandResult {
     targetStageId?: StageId;
     targetSubStatus?: string;
   } | null;
+  delete?: {
+    targetQuery: string;
+    taskId?: string;
+  } | null;
+  chainedAction?: AICommandResult | null;
 }
 
 export interface AIActionLog {
   id: string;
   timestamp: string; // ISO datetime string
-  type: 'UPDATE_STAGE' | 'CREATE_TASK' | 'FILTER_BOARD';
+  type: AIActionType;
   description: string;
   taskId?: string;
   taskTitle?: string;

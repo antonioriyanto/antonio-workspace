@@ -14,17 +14,32 @@ import {
   Trash2
 } from 'lucide-react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
-import { parseConversationalTask } from '../services/aiTaskService';
+import { parseConversationalTask, findMatchingTasks } from '../services/aiTaskService';
 import { getTodayIso } from '../utils/dateUtils';
-import { TaskFormData } from '../types';
+import { Task, TaskFormData, StageId, AICommandResult } from '../types';
 
 const EXAMPLE_PROMPTS = [
   'Ada berapa task telat hari ini dan siapa saja PIC-nya?',
   'bikin task baru kartu ucapan pic bu evy deadline besok jam 3 sore ingetin sebelum makan siang toko wtc grand mall',
-  'desain request pop promo urgent hari ini selesai untuk desain pic itho',
-  'filter task bu evy yang urgent',
-  'tandai selesai task kartu ucapan natal'
+  'desain request pop promo urgent hari ini selesai untuk desain',
+  'tandai selesai task kartu ucapan lalu bikin task baru poster promo ramadhan',
+  'hapus task flyer opening wtc',
+  'filter task bu evy yang urgent'
 ];
+
+interface CandidateSelectionState {
+  candidates: Task[];
+  intent: 'UPDATE_TASK' | 'DELETE_TASK';
+  targetStageId?: StageId;
+  targetSubStatus?: string;
+  chainedAction?: AICommandResult | null;
+  query: string;
+}
+
+interface ZeroMatchState {
+  query: string;
+  actionType: 'UPDATE' | 'DELETE';
+}
 
 export const AIPromptBar: React.FC = () => {
   const {
@@ -34,6 +49,7 @@ export const AIPromptBar: React.FC = () => {
     pics,
     categories,
     stores,
+    activeWorkspace,
     openTaskModal,
     addToast,
     geminiApiKey,
@@ -43,6 +59,7 @@ export const AIPromptBar: React.FC = () => {
     toggleQuickUrgent,
     quickUrgentOnly,
     moveTaskStage,
+    deleteTask,
     aiActionLogs,
     addAIActionLog,
     revertAIAction,
@@ -58,6 +75,10 @@ export const AIPromptBar: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [aiAnswer, setAiAnswer] = useState<string | null>(null);
 
+  // Interactive Action Chips states
+  const [candidateSelection, setCandidateSelection] = useState<CandidateSelectionState | null>(null);
+  const [zeroMatchPrompt, setZeroMatchPrompt] = useState<ZeroMatchState | null>(null);
+
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -67,6 +88,8 @@ export const AIPromptBar: React.FC = () => {
       setShowKeyInput(!geminiApiKey);
       setErrorMessage(null);
       setAiAnswer(null);
+      setCandidateSelection(null);
+      setZeroMatchPrompt(null);
     }
   }, [isAiPromptOpen, geminiApiKey]);
 
@@ -83,6 +106,156 @@ export const AIPromptBar: React.FC = () => {
     }, 1200);
   };
 
+  /**
+   * Helper to execute chained CREATE_TASK intent
+   */
+  const handleChainedCreateTask = (chainedAction: AICommandResult) => {
+    if (!chainedAction.task) return;
+    let storeIds = [...(chainedAction.task.storeIds || ['ALL_STORES'])];
+
+    if (chainedAction.newStore?.name) {
+      const rawStoreName = chainedAction.newStore.name.trim();
+      const existing = stores.find(s => s.name.toLowerCase() === rawStoreName.toLowerCase());
+      if (existing) {
+        if (!storeIds.includes(existing.id)) {
+          storeIds = storeIds.filter(id => id !== 'ALL_STORES').concat(existing.id);
+        }
+      } else {
+        const created = addStore({ name: rawStoreName, am: chainedAction.newStore.am || '', spv: '' });
+        storeIds = storeIds.filter(id => id !== 'ALL_STORES').concat(created.id);
+        addToast(`Toko baru "${rawStoreName}" otomatis didaftarkan`, 'info');
+      }
+    }
+
+    const taskDataToPrefill: TaskFormData = {
+      ...chainedAction.task,
+      storeIds: storeIds.length > 0 ? storeIds : ['ALL_STORES']
+    };
+
+    addAIActionLog({
+      type: 'CREATE_TASK',
+      description: `Buka form task baru lanjutan: "${taskDataToPrefill.title}" (PIC: ${taskDataToPrefill.picHq})`,
+      taskTitle: taskDataToPrefill.title
+    });
+
+    closeAiPrompt();
+    setPromptText('');
+    setCandidateSelection(null);
+    setZeroMatchPrompt(null);
+    openTaskModal(null, taskDataToPrefill);
+  };
+
+  /**
+   * Action when user selects one candidate task from interactive chips
+   */
+  const handleSelectCandidate = (task: Task) => {
+    if (!candidateSelection) return;
+
+    const { intent, targetStageId, targetSubStatus, chainedAction } = candidateSelection;
+
+    if (intent === 'DELETE_TASK') {
+      deleteTask(task.id);
+      const logId = addAIActionLog({
+        type: 'DELETE_TASK',
+        description: `Hapus task "${task.title}" (#${task.id}) ke Recycle Bin`,
+        taskId: task.id,
+        taskTitle: task.title
+      });
+
+      if (chainedAction && chainedAction.intent === 'CREATE_TASK' && chainedAction.task) {
+        handleChainedCreateTask(chainedAction);
+        addToast(`Task "${task.title}" dipindahkan ke Recycle Bin & Form task baru dibuka!`, 'success');
+      } else {
+        closeAiPrompt();
+        setPromptText('');
+        setCandidateSelection(null);
+        addToast(
+          `Task "${task.title}" dipindahkan ke Recycle Bin`,
+          'info',
+          {
+            label: 'Undo',
+            onClick: () => revertAIAction(logId)
+          },
+          7000
+        );
+      }
+    } else if (intent === 'UPDATE_TASK') {
+      const newStage = targetStageId || 'COMPLETED';
+      moveTaskStage(task.id, newStage, targetSubStatus);
+
+      const logId = addAIActionLog({
+        type: 'UPDATE_STAGE',
+        description: `Pindahkan "${task.title}" ke stage ${newStage}`,
+        taskId: task.id,
+        taskTitle: task.title,
+        prevStageId: task.stageId,
+        prevSubStatus: task.subStatus,
+        newStageId: newStage,
+        newSubStatus: targetSubStatus
+      });
+
+      if (chainedAction && chainedAction.intent === 'CREATE_TASK' && chainedAction.task) {
+        handleChainedCreateTask(chainedAction);
+        addToast(`Task "${task.title}" dipindahkan ke ${newStage} & Form task baru dibuka!`, 'success');
+      } else {
+        closeAiPrompt();
+        setPromptText('');
+        setCandidateSelection(null);
+        addToast(
+          `Task "${task.title}" dipindahkan ke ${newStage}`,
+          'success',
+          {
+            label: 'Undo',
+            onClick: () => revertAIAction(logId)
+          },
+          7000
+        );
+      }
+    }
+  };
+
+  /**
+   * Action when user clicks 0% match chip to create task
+   */
+  const handleCreateFromZeroMatch = (titleText: string) => {
+    const isPersonal = activeWorkspace === 'Personal Project';
+    const defaultPic = isPersonal
+      ? (pics.find(p => p.name.toUpperCase() === 'ANTONIO')?.name || 'ANTONIO')
+      : (pics[0]?.name || 'BU EVY');
+
+    const defaultCategory = isPersonal
+      ? (categories.find(c => c.toLowerCase() === 'digital') || 'Digital')
+      : (categories[0] || 'Poster');
+
+    const draft: TaskFormData = {
+      title: titleText.toUpperCase(),
+      category: defaultCategory,
+      priority: 'MEDIUM',
+      dateCreated: getTodayIso(),
+      deadline: getTodayIso(),
+      picHq: defaultPic,
+      storeIds: ['ALL_STORES'],
+      stageId: 'CREATIVE',
+      subStatus: 'IN_DESIGN',
+      notes: 'Dibuat cepat dari saran AI Command Bar',
+      reminderAt: null,
+      reminderNotified: false
+    };
+
+    addAIActionLog({
+      type: 'CREATE_TASK',
+      description: `Buat task baru dari saran AI: "${draft.title}"`,
+      taskTitle: draft.title
+    });
+
+    closeAiPrompt();
+    setPromptText('');
+    setZeroMatchPrompt(null);
+    setCandidateSelection(null);
+    openTaskModal(null, draft);
+    addToast(`Membuka form task baru: "${draft.title}"`, 'info');
+  };
+
   const handleGenerate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!promptText.trim()) return;
@@ -95,7 +268,10 @@ export const AIPromptBar: React.FC = () => {
 
     setErrorMessage(null);
     setAiAnswer(null);
+    setCandidateSelection(null);
+    setZeroMatchPrompt(null);
     setIsLoading(true);
+
     try {
       const todayIso = getTodayIso();
       const parsed = await parseConversationalTask(
@@ -105,7 +281,8 @@ export const AIPromptBar: React.FC = () => {
           pics,
           categories,
           stores,
-          todayIso
+          todayIso,
+          activeWorkspace
         },
         geminiApiKey || tempKey.trim()
       );
@@ -141,21 +318,75 @@ export const AIPromptBar: React.FC = () => {
         return;
       }
 
-      // 2. UPDATE_TASK intent
+      // 2. DELETE_TASK intent (Soft-delete via AI)
+      if (parsed.intent === 'DELETE_TASK') {
+        const query = parsed.delete?.targetQuery || promptText;
+        const matchResult = findMatchingTasks(query, tasks);
+
+        if (matchResult.exactMatch) {
+          const target = matchResult.exactMatch;
+          deleteTask(target.id);
+
+          const logId = addAIActionLog({
+            type: 'DELETE_TASK',
+            description: `Hapus task "${target.title}" (#${target.id}) ke Recycle Bin`,
+            taskId: target.id,
+            taskTitle: target.title
+          });
+
+          // Check for chained action
+          if (parsed.chainedAction && parsed.chainedAction.intent === 'CREATE_TASK' && parsed.chainedAction.task) {
+            handleChainedCreateTask(parsed.chainedAction);
+            addToast(`Task "${target.title}" dipindahkan ke Recycle Bin & Form task baru dibuka!`, 'success');
+            return;
+          }
+
+          closeAiPrompt();
+          setPromptText('');
+          setErrorMessage(null);
+
+          addToast(
+            `Task "${target.title}" dipindahkan ke Recycle Bin`,
+            'info',
+            {
+              label: 'Undo',
+              onClick: () => {
+                revertAIAction(logId);
+              }
+            },
+            7000
+          );
+          return;
+        } else if (matchResult.candidates.length > 0) {
+          // Multiple matches or generic stop word guardrail triggered -> show interactive selection chips
+          setCandidateSelection({
+            candidates: matchResult.candidates,
+            intent: 'DELETE_TASK',
+            chainedAction: parsed.chainedAction,
+            query
+          });
+          addToast(`Pilih task yang ingin dihapus dari ${matchResult.candidates.length} opsi di bawah`, 'info');
+          return;
+        } else {
+          // 0% match
+          setZeroMatchPrompt({
+            query,
+            actionType: 'DELETE'
+          });
+          addToast(`Task "${query}" tidak ditemukan`, 'error');
+          return;
+        }
+      }
+
+      // 3. UPDATE_TASK intent
       if (parsed.intent === 'UPDATE_TASK' && parsed.update) {
-        const query = (parsed.update.targetQuery || '').toLowerCase().trim();
-        const cleanQuery = query.replace(/^#/, '');
+        const query = parsed.update.targetQuery || promptText;
+        const matchResult = findMatchingTasks(query, tasks);
+        const newStage = parsed.update.targetStageId || 'COMPLETED';
+        const newSubStatus = parsed.update.targetSubStatus;
 
-        // Find matches among tasks
-        const matches = tasks.filter(t =>
-          t.id.toLowerCase() === cleanQuery ||
-          t.title.toLowerCase().includes(cleanQuery)
-        );
-
-        if (matches.length === 1) {
-          const targetTask = matches[0];
-          const newStage = parsed.update.targetStageId || 'COMPLETED';
-          const newSubStatus = parsed.update.targetSubStatus;
+        if (matchResult.exactMatch) {
+          const targetTask = matchResult.exactMatch;
           const prevStage = targetTask.stageId;
           const prevSubStatus = targetTask.subStatus;
 
@@ -171,6 +402,13 @@ export const AIPromptBar: React.FC = () => {
             newStageId: newStage,
             newSubStatus: newSubStatus
           });
+
+          // Multi-Intent Chaining: execute secondary action if present
+          if (parsed.chainedAction && parsed.chainedAction.intent === 'CREATE_TASK' && parsed.chainedAction.task) {
+            handleChainedCreateTask(parsed.chainedAction);
+            addToast(`Task "${targetTask.title}" dipindahkan ke ${newStage} & Form task baru dibuka!`, 'success');
+            return;
+          }
 
           closeAiPrompt();
           setPromptText('');
@@ -189,32 +427,30 @@ export const AIPromptBar: React.FC = () => {
             7000
           );
           return;
-        } else if (matches.length > 1) {
-          // Ambiguous: filter board safely by query rather than guessing
-          setFilter('search', cleanQuery);
-          closeAiPrompt();
-          setPromptText('');
-          setErrorMessage(null);
-          addToast(
-            `Ditemukan ${matches.length} task dengan nama serupa. Board difilter untuk Anda pilih.`,
-            'info'
-          );
+        } else if (matchResult.candidates.length > 0) {
+          // Multiple matches or generic stop word guardrail -> show candidate selection chips
+          setCandidateSelection({
+            candidates: matchResult.candidates,
+            intent: 'UPDATE_TASK',
+            targetStageId: newStage,
+            targetSubStatus: newSubStatus,
+            chainedAction: parsed.chainedAction,
+            query
+          });
+          addToast(`Pilih task yang ingin dipindahkan dari ${matchResult.candidates.length} opsi di bawah`, 'info');
           return;
         } else {
-          // No match: search on board
-          setFilter('search', cleanQuery);
-          closeAiPrompt();
-          setPromptText('');
-          setErrorMessage(null);
-          addToast(
-            `Task "${cleanQuery}" tidak ditemukan persis. Board difilter dengan kata kunci tersebut.`,
-            'info'
-          );
+          // 0% match: offer quick task creation chip
+          setZeroMatchPrompt({
+            query,
+            actionType: 'UPDATE'
+          });
+          addToast(`Task "${query}" tidak ditemukan`, 'error');
           return;
         }
       }
 
-      // 3. CREATE_TASK intent (default)
+      // 4. CREATE_TASK intent (default)
       if (parsed.task) {
         let storeIds = [...(parsed.task.storeIds || ['ALL_STORES'])];
 
@@ -297,9 +533,14 @@ export const AIPromptBar: React.FC = () => {
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-medium">
                   Gemini Flash
                 </span>
+                {activeWorkspace === 'Personal Project' && (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-medium">
+                    Personal
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Tanya status board, cari/filter task, atau buat task baru secara langsung
+                Tanya kondisi board, update stage, buat task berantai, atau kelola task
               </p>
             </div>
           </div>
@@ -401,10 +642,18 @@ export const AIPromptBar: React.FC = () => {
                                 ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
                                 : log.type === 'CREATE_TASK'
                                 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                                : log.type === 'DELETE_TASK'
+                                ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
                                 : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
                             }`}
                           >
-                            {log.type === 'UPDATE_STAGE' ? 'UPDATE' : log.type === 'CREATE_TASK' ? 'CREATE' : 'FILTER'}
+                            {log.type === 'UPDATE_STAGE'
+                              ? 'UPDATE'
+                              : log.type === 'CREATE_TASK'
+                              ? 'CREATE'
+                              : log.type === 'DELETE_TASK'
+                              ? 'DELETE'
+                              : 'FILTER'}
                           </span>
                           <span className="font-medium text-zinc-800 dark:text-zinc-200 truncate">
                             {log.description}
@@ -421,7 +670,7 @@ export const AIPromptBar: React.FC = () => {
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {log.taskId && (
+                        {log.taskId && log.type !== 'DELETE_TASK' && (
                           <button
                             type="button"
                             onClick={() => {
@@ -435,7 +684,7 @@ export const AIPromptBar: React.FC = () => {
                           </button>
                         )}
 
-                        {log.type === 'UPDATE_STAGE' && (
+                        {(log.type === 'UPDATE_STAGE' || log.type === 'DELETE_TASK') && (
                           <button
                             type="button"
                             disabled={log.isReverted}
@@ -515,7 +764,7 @@ export const AIPromptBar: React.FC = () => {
               disabled={isLoading}
               onChange={(e) => setPromptText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Contoh: tolong bikin task baru pic bu evy kartu ucapan deadline cetak lusa hari ini preview dlu..."
+              placeholder="Contoh: tandai selesai task kartu ucapan lalu bikin task baru poster promo ramadhan toko wtc surabaya..."
               className="w-full p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-blue-500 dark:focus:border-blue-500 resize-none transition shadow-inner leading-relaxed"
             />
 
@@ -547,6 +796,84 @@ export const AIPromptBar: React.FC = () => {
               >
                 <X className="w-3.5 h-3.5" />
               </button>
+            </div>
+          )}
+
+          {/* Interactive Action Chips: Candidate Selection */}
+          {candidateSelection && candidateSelection.candidates.length > 0 && (
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2.5 animate-in fade-in slide-in-from-top-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    {candidateSelection.candidates.length} Task Ditemukan untuk "{candidateSelection.query}":
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCandidateSelection(null)}
+                  className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                Klik salah satu task di bawah untuk {candidateSelection.intent === 'DELETE_TASK' ? 'dihapus' : 'dipindahkan'}:
+              </p>
+              <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto pt-1">
+                {candidateSelection.candidates.slice(0, 8).map((task) => (
+                  <button
+                    key={task.id}
+                    type="button"
+                    onClick={() => handleSelectCandidate(task)}
+                    className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-800/90 border border-zinc-200 dark:border-zinc-700 hover:border-blue-500 dark:hover:border-blue-400 text-xs text-left transition flex items-center gap-2 group shadow-xs active:scale-95"
+                  >
+                    <span className="font-mono text-[10px] text-blue-600 dark:text-blue-400 font-semibold group-hover:underline">
+                      #{task.id}
+                    </span>
+                    <span className="font-medium text-zinc-800 dark:text-zinc-200 truncate max-w-[200px]">
+                      {task.title}
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-900 text-zinc-500 font-mono">
+                      {task.stageId}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Interactive Action Chips: 0% Match Found */}
+          {zeroMatchPrompt && (
+            <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/25 space-y-2 animate-in fade-in slide-in-from-top-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4 text-blue-500 shrink-0" />
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    Task "{zeroMatchPrompt.query}" Tidak Ditemukan
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setZeroMatchPrompt(null)}
+                  className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                Tidak ada task yang cocok untuk di{zeroMatchPrompt.actionType === 'DELETE' ? 'hapus' : 'perbarui'}. Apakah Anda ingin langsung membuat task baru dengan judul ini?
+              </p>
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => handleCreateFromZeroMatch(zeroMatchPrompt.query)}
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>+ Buat Task Baru: "{zeroMatchPrompt.query.toUpperCase()}"</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -588,7 +915,11 @@ export const AIPromptBar: React.FC = () => {
                   key={idx}
                   type="button"
                   disabled={isLoading}
-                  onClick={() => setPromptText(ex)}
+                  onClick={() => {
+                    setPromptText(ex);
+                    setCandidateSelection(null);
+                    setZeroMatchPrompt(null);
+                  }}
                   className="text-left text-[11px] px-2.5 py-1 rounded-lg glass-control text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:border-zinc-400 dark:hover:border-zinc-600 transition truncate max-w-full"
                 >
                   "{ex}"

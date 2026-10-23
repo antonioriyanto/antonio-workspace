@@ -8,6 +8,7 @@ export interface AIParsingContext {
   categories: string[];
   stores: Store[];
   todayIso: string;
+  activeWorkspace?: string;
 }
 
 interface CandidateEndpoint {
@@ -27,12 +28,262 @@ const CANDIDATE_ENDPOINTS: CandidateEndpoint[] = [
 ];
 
 /**
+ * Common generic words that should NOT cause auto-matching to a single task
+ * without user confirmation chips.
+ */
+export const GENERIC_STOP_WORDS = new Set([
+  'pop', 'poster', 'cetak', 'revisi', 'desain', 'design', 'print',
+  'banner', 'brosur', 'flyer', 'task', 'tugas', 'urgent', 'acc',
+  'promo', 'opening', 'project', 'projek', 'baru'
+]);
+
+export interface FuzzyMatchResult {
+  exactMatch: Task | null;
+  candidates: Task[];
+  isGenericStopWord: boolean;
+}
+
+/**
+ * Deep fuzzy task matching across title, notes, category, and picHq with guardrails
+ * against single generic words ("pop", "poster", "cetak", "revisi").
+ */
+export function findMatchingTasks(query: string, tasks: Task[]): FuzzyMatchResult {
+  const trimmed = (query || '').trim();
+  if (!trimmed) {
+    return { exactMatch: null, candidates: [], isGenericStopWord: false };
+  }
+
+  const cleanQuery = trimmed.replace(/^#/, '').toLowerCase();
+  const tokens = cleanQuery.split(/\s+/).filter(t => t.length > 0);
+  const isGenericStopWord = tokens.length === 1 && GENERIC_STOP_WORDS.has(tokens[0]);
+
+  // Priority 1: Exact task ID match
+  const idMatch = tasks.find(t => t.id.toLowerCase() === cleanQuery);
+  if (idMatch) {
+    return { exactMatch: idMatch, candidates: [idMatch], isGenericStopWord: false };
+  }
+
+  // Priority 2: Exact title match
+  const titleExactMatches = tasks.filter(t => t.title.toLowerCase() === cleanQuery);
+  if (titleExactMatches.length === 1 && !isGenericStopWord) {
+    return { exactMatch: titleExactMatches[0], candidates: titleExactMatches, isGenericStopWord: false };
+  }
+
+  // Deep scoring across title, notes, category, picHq
+  const scored = tasks.map(t => {
+    const titleLower = t.title.toLowerCase();
+    const notesLower = (t.notes || '').toLowerCase();
+    const catLower = (t.category || '').toLowerCase();
+    const picLower = (t.picHq || '').toLowerCase();
+
+    let score = 0;
+    if (titleLower === cleanQuery) score += 100;
+    if (titleLower.startsWith(cleanQuery)) score += 50;
+    if (titleLower.includes(cleanQuery)) score += 30;
+    if (notesLower.includes(cleanQuery)) score += 15;
+    if (catLower.includes(cleanQuery)) score += 10;
+    if (picLower.includes(cleanQuery)) score += 10;
+
+    tokens.forEach(tok => {
+      if (tok.length > 1) {
+        if (titleLower.includes(tok)) score += 8;
+        if (notesLower.includes(tok)) score += 4;
+        if (catLower.includes(tok)) score += 3;
+        if (picLower.includes(tok)) score += 3;
+      }
+    });
+
+    return { task: t, score };
+  });
+
+  const candidates = scored
+    .filter(s => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(s => s.task);
+
+  // If query is a single generic stop word (e.g. "pop", "poster", "cetak", "revisi"),
+  // guardrail prevents auto-picking an arbitrary exact match: require user selection chips!
+  if (isGenericStopWord) {
+    return { exactMatch: null, candidates, isGenericStopWord: true };
+  }
+
+  // If single candidate
+  if (candidates.length === 1) {
+    return { exactMatch: candidates[0], candidates, isGenericStopWord: false };
+  }
+
+  // If top candidate has a clear decisive margin
+  if (candidates.length > 1) {
+    const topScore = scored.find(s => s.task.id === candidates[0].id)?.score || 0;
+    const secondScore = scored.find(s => s.task.id === candidates[1].id)?.score || 0;
+    if (topScore >= 30 && topScore >= secondScore * 1.8) {
+      return { exactMatch: candidates[0], candidates, isGenericStopWord: false };
+    }
+  }
+
+  return { exactMatch: null, candidates, isGenericStopWord: false };
+}
+
+/**
+ * Helper to build TaskFormData with workspace-aware defaults,
+ * smart alarm rollover, and new store detection.
+ */
+export function buildTaskFormData(
+  taskObj: Record<string, unknown> | undefined,
+  prompt: string,
+  context: AIParsingContext,
+  todayIso: string
+): { task: TaskFormData; newStore: { name: string; am?: string } | null } {
+  const isPersonal = context.activeWorkspace === 'Personal Project';
+  const picNames = context.pics.map(p => p.name);
+  const categoriesList = context.categories;
+
+  const rawObj = taskObj || {};
+
+  // Title
+  let title = (typeof rawObj.title === 'string' && rawObj.title.trim())
+    ? rawObj.title.trim().toUpperCase()
+    : prompt.slice(0, 40).toUpperCase();
+
+  title = title.replace(/^(?:LALU|KEMUDIAN|SETELAH ITU)\s+(?:BIKIN|BUAT|TAMBAH)\s+(?:TASK\s+)?/i, '').trim();
+  if (!title) title = 'UNTITLED TASK';
+
+  // Workspace-Aware Default PIC
+  let defaultPic = isPersonal
+    ? (picNames.find(p => p.toUpperCase() === 'ANTONIO') || 'ANTONIO')
+    : (picNames[0] || 'BU EVY');
+
+  let picHq = defaultPic;
+  if (typeof rawObj.picHq === 'string' && rawObj.picHq.trim()) {
+    const matchedPic = picNames.find(p => p.toLowerCase() === (rawObj.picHq as string).toLowerCase().trim());
+    if (matchedPic) {
+      picHq = matchedPic;
+    } else {
+      picHq = rawObj.picHq.trim().toUpperCase();
+    }
+  }
+
+  // Workspace-Aware Default Category
+  let defaultCategory = isPersonal
+    ? (categoriesList.find(c => c.toLowerCase() === 'digital') || 'Digital')
+    : (categoriesList[0] || 'Poster');
+
+  let category = defaultCategory;
+  if (typeof rawObj.category === 'string' && rawObj.category.trim()) {
+    const matchedCat = categoriesList.find(c => c.toLowerCase() === (rawObj.category as string).toLowerCase().trim());
+    if (matchedCat) category = matchedCat;
+  }
+
+  // Priority
+  let priority: Priority = 'MEDIUM';
+  const promptLower = prompt.toLowerCase();
+  if (promptLower.includes('urgent') || promptLower.includes('kritis') || promptLower.includes('asap') || promptLower.includes('segera')) {
+    priority = 'CRITICAL';
+  } else if (typeof rawObj.priority === 'string') {
+    const pUpper = (rawObj.priority as string).toUpperCase();
+    if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(pUpper)) {
+      priority = pUpper as Priority;
+    }
+  }
+
+  // Deadline
+  let deadline = addWorkingDays(todayIso, 3);
+  if (typeof rawObj.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawObj.deadline)) {
+    deadline = rawObj.deadline;
+  }
+
+  // ReminderAt with Smart Alarm Rollover
+  let reminderAt: string | null = null;
+  if (typeof rawObj.reminderAt === 'string' && rawObj.reminderAt.trim()) {
+    const remRaw = rawObj.reminderAt.trim();
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(remRaw)) {
+      reminderAt = remRaw.length === 16 ? `${remRaw}:00` : remRaw;
+    }
+  } else if (promptLower.includes('makan siang')) {
+    reminderAt = `${todayIso}T11:30:00`;
+  } else if (promptLower.includes('sebelum pulang') || promptLower.includes('pulang kerja')) {
+    reminderAt = `${todayIso}T16:30:00`;
+  }
+
+  // Smart Alarm Rollover: if reminder time has already passed today, rollover to 09:00 AM on next working day
+  if (reminderAt) {
+    const reminderDate = new Date(reminderAt);
+    const now = new Date();
+    if (!isNaN(reminderDate.getTime()) && reminderDate.getTime() <= now.getTime()) {
+      const nextWorkDay = addWorkingDays(todayIso, 1);
+      reminderAt = `${nextWorkDay}T09:00:00`;
+    }
+  }
+
+  // Stage & SubStatus
+  let stageId: StageId = 'CREATIVE';
+  if (promptLower.includes('desain request') || promptLower.includes('untuk desain') || promptLower.includes('desain')) {
+    stageId = 'CREATIVE';
+  } else if (typeof rawObj.stageId === 'string' && WTC_CONFIG.STAGES.some(s => s.id === rawObj.stageId)) {
+    stageId = rawObj.stageId as StageId;
+  }
+
+  let subStatus = WTC_CONFIG.SUB_STATUSES.find(s => s.stageId === stageId)?.id || 'IN_DESIGN';
+  if (typeof rawObj.subStatus === 'string') {
+    const matchedSub = WTC_CONFIG.SUB_STATUSES.find(s => s.id === rawObj.subStatus);
+    if (matchedSub) {
+      subStatus = matchedSub.id;
+      stageId = matchedSub.stageId;
+    }
+  }
+
+  // StoreIds: Workspace-Aware Default
+  let storeIds: string[] = ['ALL_STORES'];
+  if (Array.isArray(rawObj.storeIds) && rawObj.storeIds.length > 0) {
+    storeIds = rawObj.storeIds.map(String);
+  }
+
+  // newStore
+  let newStore: { name: string; am?: string } | null = null;
+  const newStoreRaw = rawObj.newStore as { name?: string; am?: string } | undefined;
+  if (newStoreRaw && typeof newStoreRaw.name === 'string' && newStoreRaw.name.trim() !== '') {
+    const cleanStoreName = newStoreRaw.name.trim();
+    const existing = context.stores.find(s => s.name.toLowerCase() === cleanStoreName.toLowerCase());
+    if (existing) {
+      storeIds = [existing.id];
+    } else {
+      newStore = {
+        name: cleanStoreName,
+        am: newStoreRaw.am || ''
+      };
+      storeIds = [];
+    }
+  }
+
+  const notes = typeof rawObj.notes === 'string' ? rawObj.notes.trim() : '';
+
+  const taskData: TaskFormData = {
+    title,
+    category,
+    priority,
+    dateCreated: todayIso,
+    deadline,
+    picHq,
+    storeIds,
+    stageId,
+    subStatus,
+    notes,
+    reminderAt,
+    reminderNotified: false
+  };
+
+  return { task: taskData, newStore };
+}
+
+/**
  * Context-Aware Assistant & Universal Intent Parser for Antonio Riyanto Workspace.
- * Parses conversational inputs into 4 distinct intents:
+ * Parses conversational inputs into 5 distinct intents:
  * 1. ANSWER_QUERY: answers analytical board queries (e.g. "Ada berapa task telat hari ini?")
- * 2. CREATE_TASK: creates tasks with exact reminder calculation and new store detection
+ * 2. CREATE_TASK: creates tasks with smart alarm rollover and workspace defaults
  * 3. FILTER_BOARD: filters kanban board or sheet view with semantic guardrails
  * 4. UPDATE_TASK: moves or updates existing task status
+ * 5. DELETE_TASK: soft-deletes a task to the recycle bin
+ * Also supports Multi-Intent Chaining (e.g. update + create).
  */
 export async function parseConversationalTask(
   prompt: string,
@@ -53,6 +304,7 @@ export async function parseConversationalTask(
   const indonesianDays = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
   const dayName = indonesianDays[todayDate.getDay()];
 
+  const isPersonal = context.activeWorkspace === 'Personal Project';
   const picNames = context.pics.map(p => p.name);
   const categoriesList = context.categories;
   const storeListFormatted = context.stores.map(s => `${s.id}: ${s.name} (AM: ${s.am})`).join(', ');
@@ -71,7 +323,7 @@ export async function parseConversationalTask(
 
   const systemInstructionText = `
 Anda adalah Context-Aware AI Assistant & Universal Command Parser untuk aplikasi Kanban 'Antonio Riyanto Workspace'.
-Tugas Anda membaca instruksi atau pertanyaan percakapan bahasa Indonesia / Inggris dari pengguna, lalu mengklasifikasikan dan mengonversinya ke dalam salah satu dari 4 INTENT:
+Tugas Anda membaca instruksi atau pertanyaan percakapan bahasa Indonesia / Inggris dari pengguna, lalu mengklasifikasikan dan mengonversinya ke dalam salah satu dari 5 INTENT:
 
 1. "ANSWER_QUERY" : Menjawab pertanyaan analitis, status, jumlah, atau informasi umum mengenai task di board saat ini.
    - Contoh pertanyaan: "Ada berapa task telat hari ini?", "Siapa PIC yang pegang task paling banyak?", "Task apa saja yang deadline hari ini?", "Berapa task di stage creative?", "Ringkas kondisi board saat ini".
@@ -93,6 +345,31 @@ Tugas Anda membaca instruksi atau pertanyaan percakapan bahasa Indonesia / Inggr
 
 4. "UPDATE_TASK" : Memperbarui / memindahkan status task yang ada.
    - Contoh: "Tandai selesai task kartu ucapan", "Pindahkan task #T102 ke produksi".
+
+5. "DELETE_TASK" : Menghapus / memindahkan task yang ada ke Recycle Bin (soft delete).
+   - Contoh: "Hapus task kartu ucapan", "Delete task #T102", "Buang task flyer promo ke recycle bin".
+
+WORKSPACE AKTIF: "${context.activeWorkspace || 'Watch Club'}"
+ATURAN WORKSPACE-AWARE DEFAULTS:
+${isPersonal ? `
+- Saat ini workspace adalah "Personal Project":
+  * Default PIC jika tidak disebutkan adalah "ANTONIO".
+  * Default Kategori jika tidak disebutkan adalah "Digital".
+  * Default Toko adalah "ALL_STORES".
+` : `
+- Saat ini workspace adalah "Watch Club":
+  * Default PIC jika tidak disebutkan adalah "${picNames[0] || 'BU EVY'}".
+  * Default Kategori jika tidak disebutkan adalah "${categoriesList[0] || 'Poster'}".
+  * Default Toko adalah "ALL_STORES".
+`}
+
+MULTI-INTENT CHAINING:
+Jika pengguna memberikan dua perintah berantai sekaligus dengan kata hubung "lalu", "kemudian", "dan setelah itu" (contoh: "Tandai selesai task kartu ucapan lalu bikin task baru poster promo ramadhan"):
+- Tetapkan intent utama pada aksi pertama ("UPDATE_TASK" atau "DELETE_TASK").
+- Isi field "chainedAction" dengan aksi kedua ("CREATE_TASK").
+
+SMART ALARM ROLLOVER:
+Jika pengguna meminta waktu pengingat/alarm pada jam tertentu, dan jam tersebut sudah terlewat hari ini, jadwalkan pengingat ke jam 09:00:00 pagi di hari kerja berikutnya ("${addWorkingDays(todayIso, 1)}T09:00:00").
 
 INFORMASI WAKTU SAAT INI:
 - Tanggal hari ini: ${todayIso} (${dayName})
@@ -126,28 +403,16 @@ DAFTAR STAGE DAN SUB-STATUS:
 5. Stage "COMPLETED":
    - "COMPLETED_INSTALLED" (Terpasang / Selesai)
 
-ATURAN KHUSUS CREATE_TASK:
-- Permintaan seperti "desain request", "urgent hari ini selesai untuk desain" ->
-  - stageId: "CREATIVE"
-  - subStatus: "IN_DESIGN"
-  - priority: "CRITICAL"
-- Permintaan "revisi desain" -> stageId: "CREATIVE", subStatus: "REVISION_REQUIRED"
-- Waktu Pengingat (reminderAt format "YYYY-MM-DDTHH:mm:00"):
-  - "sebelum makan siang" / "jam makan siang" -> "${todayIso}T11:30:00"
-  - "sebelum pulang" / "sore sebelum pulang" -> "${todayIso}T16:30:00"
-  - "ingetin jam [HH]" -> "${todayIso}T[HH]:[MM]:00"
-- Toko Baru: jika menyebut toko yang belum ada di daftar toko terdaftar, isi newStore: { "name": "...", "am": "" } dan storeIds: [].
-
 FORMAT OUTPUT WAJIB:
 Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
 {
-  "intent": "ANSWER_QUERY" | "CREATE_TASK" | "FILTER_BOARD" | "UPDATE_TASK",
+  "intent": "ANSWER_QUERY" | "CREATE_TASK" | "FILTER_BOARD" | "UPDATE_TASK" | "DELETE_TASK",
   "explanation": "Penjelasan singkat",
 
-  // Wajib diisi jika intent == "ANSWER_QUERY"
+  // Wajib jika intent == "ANSWER_QUERY"
   "answer": "Jawaban lengkap dan jelas berdasarkan task aktif di board saat ini",
 
-  // Wajib diisi jika intent == "CREATE_TASK"
+  // Wajib jika intent == "CREATE_TASK"
   "task": {
     "title": "Judul singkat jelas dalam HURUF KAPITAL",
     "picHq": "Nama PIC cocok dari daftar",
@@ -166,7 +431,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
     "am": ""
   } | null,
 
-  // Wajib diisi jika intent == "FILTER_BOARD"
+  // Wajib jika intent == "FILTER_BOARD"
   "filter": {
     "search": "kata kunci spesifik produk (BUKAN 'overdue' / 'telat' / 'urgent')",
     "priority": "ALL" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
@@ -177,11 +442,24 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
     "quickUrgentOnly": false
   } | null,
 
-  // Wajib diisi jika intent == "UPDATE_TASK"
+  // Wajib jika intent == "UPDATE_TASK"
   "update": {
     "targetQuery": "kata kunci judul task atau #ID",
     "targetStageId": "COMPLETED" | "CREATIVE" | "PRODUCTION" | "LOGISTICS" | "BACKLOG",
     "targetSubStatus": "COMPLETED_INSTALLED"
+  } | null,
+
+  // Wajib jika intent == "DELETE_TASK"
+  "delete": {
+    "targetQuery": "kata kunci judul task atau #ID",
+    "taskId": "ID jika spesifik"
+  } | null,
+
+  // Opsional jika ada multi-intent chaining
+  "chainedAction": {
+    "intent": "CREATE_TASK",
+    "explanation": "Penjelasan task kedua",
+    "task": { ... }
   } | null
 }
 `.trim();
@@ -293,7 +571,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
         continue;
       }
 
-      // Robust clean JSON extraction (strips markdown ```json ... ``` wrapper or surrounding text)
+      // Robust clean JSON extraction
       let cleanedText = rawText.trim();
       cleanedText = cleanedText.replace(/```(?:json)?\s*/gi, '').replace(/\s*```/g, '').trim();
 
@@ -303,7 +581,6 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
       }
 
       parsedJson = JSON.parse(cleanedText);
-      // Successfully parsed JSON, break out of candidate loop
       break;
     } catch (parseErr) {
       console.warn(`[Gemini JSON Parse Error] Candidate ${candidate.version}/${candidate.model}:`, parseErr);
@@ -323,12 +600,42 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
 
   // Determine intent
   const intentRaw = typeof parsedJson.intent === 'string' ? parsedJson.intent.toUpperCase() : 'CREATE_TASK';
-  const intent: 'ANSWER_QUERY' | 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' =
-    ['ANSWER_QUERY', 'FILTER_BOARD', 'UPDATE_TASK'].includes(intentRaw)
-      ? (intentRaw as 'ANSWER_QUERY' | 'FILTER_BOARD' | 'UPDATE_TASK')
+  const intent: 'ANSWER_QUERY' | 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'DELETE_TASK' =
+    ['ANSWER_QUERY', 'FILTER_BOARD', 'UPDATE_TASK', 'DELETE_TASK'].includes(intentRaw)
+      ? (intentRaw as 'ANSWER_QUERY' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'DELETE_TASK')
       : 'CREATE_TASK';
 
   const explanation = typeof parsedJson.explanation === 'string' ? parsedJson.explanation.trim() : '';
+
+  // Process potential chainedAction (e.g. update + create)
+  let chainedAction: AICommandResult | null = null;
+  if (parsedJson.chainedAction && typeof parsedJson.chainedAction === 'object') {
+    const chObj = parsedJson.chainedAction as Record<string, unknown>;
+    const chIntent = typeof chObj.intent === 'string' ? chObj.intent.toUpperCase() : 'CREATE_TASK';
+    if (chIntent === 'CREATE_TASK') {
+      const chTaskRaw = (chObj.task && typeof chObj.task === 'object') ? (chObj.task as Record<string, unknown>) : chObj;
+      const built = buildTaskFormData(chTaskRaw, prompt, context, todayIso);
+      chainedAction = {
+        intent: 'CREATE_TASK',
+        explanation: typeof chObj.explanation === 'string' ? chObj.explanation : 'Membuat task baru lanjutan',
+        task: built.task,
+        newStore: built.newStore
+      };
+    }
+  } else {
+    // Regex fallback: check if user prompt contains chaining keywords ("lalu bikin task ...")
+    const chainMatch = prompt.match(/(?:\blalu\b|\bkemudian\b|\bsetelah itu\b)\s+(?:bikin|buat|tambah)\s+task\s*(.*)$/i);
+    if (chainMatch && (intent === 'UPDATE_TASK' || intent === 'DELETE_TASK')) {
+      const subPrompt = chainMatch[1] || 'Task Baru';
+      const built = buildTaskFormData({ title: subPrompt.toUpperCase() }, subPrompt, context, todayIso);
+      chainedAction = {
+        intent: 'CREATE_TASK',
+        explanation: `Lanjutan: buat task "${built.task.title}"`,
+        task: built.task,
+        newStore: built.newStore
+      };
+    }
+  }
 
   // 1. ANSWER_QUERY intent handling
   if (intent === 'ANSWER_QUERY') {
@@ -351,7 +658,7 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
 
     let rawSearch = typeof filterObj.search === 'string' ? filterObj.search.trim() : '';
     let quickUrgent = Boolean(filterObj.quickUrgentOnly);
-    let priorityFilter = typeof filterObj.priority === 'string' ? filterObj.priority : 'ALL';
+    const priorityFilter = typeof filterObj.priority === 'string' ? filterObj.priority : 'ALL';
 
     // Strict semantic guardrail: do not let adjectives like "overdue" / "telat" / "urgent" become text queries
     const searchLower = rawSearch.toLowerCase();
@@ -379,13 +686,39 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
     };
   }
 
-  // 3. UPDATE_TASK intent handling
+  // 3. DELETE_TASK intent handling
+  if (intent === 'DELETE_TASK') {
+    const deleteObj = (parsedJson.delete && typeof parsedJson.delete === 'object')
+      ? (parsedJson.delete as Record<string, unknown>)
+      : {};
+
+    const targetQuery = typeof deleteObj.targetQuery === 'string' && deleteObj.targetQuery.trim()
+      ? deleteObj.targetQuery.trim()
+      : prompt.replace(/^(?:hapus|buang|delete|hilangkan)\s+(?:task\s+)?/i, '').trim();
+
+    const taskId = typeof deleteObj.taskId === 'string' ? deleteObj.taskId.trim() : undefined;
+
+    return {
+      intent: 'DELETE_TASK',
+      explanation: explanation || `Menghapus task "${targetQuery}"`,
+      delete: {
+        targetQuery,
+        taskId
+      },
+      chainedAction
+    };
+  }
+
+  // 4. UPDATE_TASK intent handling
   if (intent === 'UPDATE_TASK') {
     const updateObj = (parsedJson.update && typeof parsedJson.update === 'object')
       ? (parsedJson.update as Record<string, unknown>)
       : {};
 
-    const targetQuery = typeof updateObj.targetQuery === 'string' ? updateObj.targetQuery.trim() : prompt.trim();
+    let targetQuery = typeof updateObj.targetQuery === 'string' ? updateObj.targetQuery.trim() : prompt.trim();
+    // Clean query if chained ("tandai selesai task X lalu ...")
+    targetQuery = targetQuery.replace(/(?:\blalu\b|\bkemudian\b|\bsetelah itu\b).*$/i, '').trim();
+
     let targetStageId: StageId = 'COMPLETED';
     if (typeof updateObj.targetStageId === 'string' && WTC_CONFIG.STAGES.some(s => s.id === updateObj.targetStageId)) {
       targetStageId = updateObj.targetStageId as StageId;
@@ -400,125 +733,23 @@ Keluarkan HANYA JSON murni tanpa markdown, tanpa teks pengantar:
         targetQuery,
         targetStageId,
         targetSubStatus
-      }
+      },
+      chainedAction
     };
   }
 
-  // 4. CREATE_TASK intent handling (default)
+  // 5. CREATE_TASK intent handling (default)
   const taskObj = (parsedJson.task && typeof parsedJson.task === 'object')
     ? (parsedJson.task as Record<string, unknown>)
     : parsedJson;
 
-  const title = (typeof taskObj.title === 'string' && taskObj.title.trim())
-    ? taskObj.title.trim().toUpperCase()
-    : prompt.slice(0, 40).toUpperCase();
-
-  // Match PIC
-  let picHq = picNames[0] || 'BU EVY';
-  if (typeof taskObj.picHq === 'string') {
-    const matchedPic = picNames.find(p => p.toLowerCase() === (taskObj.picHq as string).toLowerCase());
-    if (matchedPic) picHq = matchedPic;
-  }
-
-  // Match Category
-  let category = categoriesList[0] || 'Poster';
-  if (typeof taskObj.category === 'string') {
-    const matchedCat = categoriesList.find(c => c.toLowerCase() === (taskObj.category as string).toLowerCase());
-    if (matchedCat) category = matchedCat;
-  }
-
-  // Match Priority (Default CRITICAL if prompt has urgent cues)
-  let priority: Priority = 'MEDIUM';
-  const promptLower = prompt.toLowerCase();
-  if (promptLower.includes('urgent') || promptLower.includes('kritis') || promptLower.includes('asap') || promptLower.includes('segera')) {
-    priority = 'CRITICAL';
-  } else if (typeof taskObj.priority === 'string') {
-    const pUpper = (taskObj.priority as string).toUpperCase();
-    if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(pUpper)) {
-      priority = pUpper as Priority;
-    }
-  }
-
-  // Match Deadline
-  let deadline = addWorkingDays(todayIso, 3);
-  if (typeof taskObj.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(taskObj.deadline)) {
-    deadline = taskObj.deadline;
-  }
-
-  // Match ReminderAt
-  let reminderAt: string | null = null;
-  if (typeof taskObj.reminderAt === 'string') {
-    const remRaw = taskObj.reminderAt.trim();
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(remRaw)) {
-      reminderAt = remRaw.length === 16 ? `${remRaw}:00` : remRaw;
-    }
-  } else if (promptLower.includes('makan siang')) {
-    reminderAt = `${todayIso}T11:30:00`;
-  } else if (promptLower.includes('sebelum pulang') || promptLower.includes('pulang kerja')) {
-    reminderAt = `${todayIso}T16:30:00`;
-  }
-
-  // Match Stage & SubStatus
-  let stageId: StageId = 'CREATIVE';
-  if (promptLower.includes('desain request') || promptLower.includes('untuk desain') || promptLower.includes('desain')) {
-    stageId = 'CREATIVE';
-  } else if (typeof taskObj.stageId === 'string' && WTC_CONFIG.STAGES.some(s => s.id === taskObj.stageId)) {
-    stageId = taskObj.stageId as StageId;
-  }
-
-  let subStatus = WTC_CONFIG.SUB_STATUSES.find(s => s.stageId === stageId)?.id || 'IN_DESIGN';
-  if (typeof taskObj.subStatus === 'string') {
-    const matchedSub = WTC_CONFIG.SUB_STATUSES.find(s => s.id === taskObj.subStatus);
-    if (matchedSub) {
-      subStatus = matchedSub.id;
-      stageId = matchedSub.stageId;
-    }
-  }
-
-  // Match StoreIds
-  let storeIds: string[] = ['ALL_STORES'];
-  if (Array.isArray(taskObj.storeIds) && taskObj.storeIds.length > 0) {
-    storeIds = taskObj.storeIds.map(String);
-  }
-
-  // Match newStore
-  let newStore: { name: string; am?: string } | null = null;
-  const newStoreRaw = parsedJson.newStore as { name?: string; am?: string } | undefined;
-  if (newStoreRaw && typeof newStoreRaw.name === 'string' && newStoreRaw.name.trim() !== '') {
-    const cleanStoreName = newStoreRaw.name.trim();
-    const existing = context.stores.find(s => s.name.toLowerCase() === cleanStoreName.toLowerCase());
-    if (existing) {
-      storeIds = [existing.id];
-    } else {
-      newStore = {
-        name: cleanStoreName,
-        am: newStoreRaw.am || ''
-      };
-      storeIds = [];
-    }
-  }
-
-  const notes = typeof taskObj.notes === 'string' ? taskObj.notes.trim() : '';
-
-  const taskData: TaskFormData = {
-    title,
-    category,
-    priority,
-    dateCreated: todayIso,
-    deadline,
-    picHq,
-    storeIds,
-    stageId,
-    subStatus,
-    notes,
-    reminderAt,
-    reminderNotified: false
-  };
+  const built = buildTaskFormData(taskObj, prompt, context, todayIso);
 
   return {
     intent: 'CREATE_TASK',
     explanation: explanation || 'Task baru berhasil dipersiapkan',
-    task: taskData,
-    newStore
+    task: built.task,
+    newStore: built.newStore,
+    chainedAction
   };
 }
