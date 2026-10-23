@@ -75,6 +75,7 @@ export interface WorkspaceData {
   workspaceName: string;
   tasks: Task[];
   deletedTasks?: Task[];
+  aiActionLogs?: AIActionLog[];
   stores: Store[];
   pics: PIC[];
   categories: string[];
@@ -155,4 +156,18 @@ export interface AICommandResult {
     targetStageId?: StageId;
     targetSubStatus?: string;
   } | null;
+}
+
+export interface AIActionLog {
+  id: string;
+  timestamp: string; // ISO datetime string
+  type: 'UPDATE_STAGE' | 'CREATE_TASK' | 'FILTER_BOARD';
+  description: string;
+  taskId?: string;
+  taskTitle?: string;
+  prevStageId?: StageId;
+  prevSubStatus?: string;
+  newStageId?: StageId;
+  newSubStatus?: string;
+  isReverted?: boolean;
 }

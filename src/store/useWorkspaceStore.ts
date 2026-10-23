@@ -12,7 +12,8 @@ import {
   ToastMessage,
   ToastAction,
   EmergencyBackup,
-  TaskFormData
+  TaskFormData,
+  AIActionLog
 } from '../types';
 import { WTC_CONFIG } from '../config';
 import { getTodayIso } from '../utils/dateUtils';
@@ -32,6 +33,7 @@ interface WorkspaceStoreState {
   categories: string[];
   gasWebhookUrl: string;
   geminiApiKey: string;
+  aiActionLogs: AIActionLog[];
   lastModified: string | null;
   lastSyncedAt: string | null;
 
@@ -85,6 +87,9 @@ interface WorkspaceStoreState {
   openAiPrompt: () => void;
   closeAiPrompt: () => void;
   setGeminiApiKey: (key: string) => void;
+  addAIActionLog: (log: Omit<AIActionLog, 'id' | 'timestamp' | 'isReverted'>) => string;
+  revertAIAction: (logId: string) => void;
+  clearAIActionLogs: () => void;
 
   // Task actions
   openTaskModal: (taskId?: string | null, prefillData?: TaskFormData | null) => void;
@@ -151,6 +156,7 @@ function getInitialWorkspaceData(activeWs: string): WorkspaceData {
         workspaceName: parsed.workspaceName || activeWs,
         tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
         deletedTasks: Array.isArray(parsed.deletedTasks) ? parsed.deletedTasks : [],
+        aiActionLogs: Array.isArray(parsed.aiActionLogs) ? parsed.aiActionLogs : [],
         stores: Array.isArray(parsed.stores) && parsed.stores.length > 0 ? parsed.stores : WTC_CONFIG.DEFAULT_STORES,
         pics: Array.isArray(parsed.pics) && parsed.pics.length > 0 ? parsed.pics : WTC_CONFIG.DEFAULT_PICS,
         categories: Array.isArray(parsed.categories) && parsed.categories.length > 0 ? parsed.categories : WTC_CONFIG.DEFAULT_CATEGORIES,
@@ -172,6 +178,7 @@ function getInitialWorkspaceData(activeWs: string): WorkspaceData {
     workspaceName: activeWs,
     tasks: initialTasks,
     deletedTasks: [],
+    aiActionLogs: [],
     stores: WTC_CONFIG.DEFAULT_STORES,
     pics: WTC_CONFIG.DEFAULT_PICS,
     categories: WTC_CONFIG.DEFAULT_CATEGORIES,
@@ -251,6 +258,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
 
     tasks: initialData.tasks,
     deletedTasks: initialData.deletedTasks || [],
+    aiActionLogs: initialData.aiActionLogs || [],
     lastDeletedTask: null,
     stores: initialData.stores,
     pics: initialData.pics,
@@ -326,6 +334,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         activeWorkspace: workspaceName,
         tasks: newData.tasks,
         deletedTasks: newData.deletedTasks || [],
+        aiActionLogs: newData.aiActionLogs || [],
         stores: newData.stores,
         pics: newData.pics,
         categories: newData.categories,
@@ -395,6 +404,109 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       }
       set({ geminiApiKey: cleanKey });
       get().addToast('API Key Gemini berhasil disimpan', 'success');
+    },
+
+    addAIActionLog: (logData) => {
+      const state = get();
+      const newLogId = `LOG_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const newLog: AIActionLog = {
+        ...logData,
+        id: newLogId,
+        timestamp: new Date().toISOString(),
+        isReverted: false
+      };
+      const updatedLogs = [newLog, ...(state.aiActionLogs || [])].slice(0, 50);
+      const nowIso = new Date().toISOString();
+
+      const updatedData: WorkspaceData = {
+        workspaceName: state.activeWorkspace,
+        tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
+        aiActionLogs: updatedLogs,
+        stores: state.stores,
+        pics: state.pics,
+        categories: state.categories,
+        gasWebhookUrl: state.gasWebhookUrl,
+        lastModified: nowIso,
+        lastSyncedAt: state.lastSyncedAt
+      };
+
+      persistWorkspaceData(updatedData);
+      set({ aiActionLogs: updatedLogs });
+      return newLogId;
+    },
+
+    revertAIAction: (logId: string) => {
+      const state = get();
+      const targetLog = (state.aiActionLogs || []).find(l => l.id === logId);
+      if (!targetLog) return;
+      if (targetLog.isReverted) {
+        get().addToast('Aksi ini sudah dibatalkan sebelumnya', 'info');
+        return;
+      }
+
+      let updatedTasks = state.tasks;
+      const nowIso = new Date().toISOString();
+
+      if (targetLog.type === 'UPDATE_STAGE' && targetLog.taskId && targetLog.prevStageId) {
+        updatedTasks = state.tasks.map(t => {
+          if (t.id === targetLog.taskId) {
+            return {
+              ...t,
+              stageId: targetLog.prevStageId!,
+              subStatus: targetLog.prevSubStatus || t.subStatus,
+              lastActionDate: getTodayIso()
+            };
+          }
+          return t;
+        });
+      }
+
+      // Mark log as reverted
+      const updatedLogs = (state.aiActionLogs || []).map(l => {
+        if (l.id === logId) {
+          return { ...l, isReverted: true };
+        }
+        return l;
+      });
+
+      const updatedData: WorkspaceData = {
+        workspaceName: state.activeWorkspace,
+        tasks: updatedTasks,
+        deletedTasks: state.deletedTasks || [],
+        aiActionLogs: updatedLogs,
+        stores: state.stores,
+        pics: state.pics,
+        categories: state.categories,
+        gasWebhookUrl: state.gasWebhookUrl,
+        lastModified: nowIso,
+        lastSyncedAt: state.lastSyncedAt
+      };
+
+      persistWorkspaceData(updatedData);
+      set({ tasks: updatedTasks, aiActionLogs: updatedLogs, lastModified: nowIso });
+      get().addToast(`Aksi "${targetLog.description}" berhasil dibatalkan`, 'info');
+      scheduleAutoPush();
+    },
+
+    clearAIActionLogs: () => {
+      const state = get();
+      const updatedLogs: AIActionLog[] = [];
+      const updatedData: WorkspaceData = {
+        workspaceName: state.activeWorkspace,
+        tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
+        aiActionLogs: updatedLogs,
+        stores: state.stores,
+        pics: state.pics,
+        categories: state.categories,
+        gasWebhookUrl: state.gasWebhookUrl,
+        lastModified: state.lastModified,
+        lastSyncedAt: state.lastSyncedAt
+      };
+      persistWorkspaceData(updatedData);
+      set({ aiActionLogs: updatedLogs });
+      get().addToast('Riwayat aksi AI berhasil dibersihkan', 'info');
     },
 
     // Recycle bin actions

@@ -1,5 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, X, ArrowRight, Loader2, Key, HelpCircle, Check, AlertCircle } from 'lucide-react';
+import {
+  Sparkles,
+  X,
+  ArrowRight,
+  Loader2,
+  Key,
+  HelpCircle,
+  Check,
+  AlertCircle,
+  History,
+  ExternalLink,
+  RotateCcw,
+  Trash2
+} from 'lucide-react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { parseConversationalTask } from '../services/aiTaskService';
 import { getTodayIso } from '../utils/dateUtils';
@@ -29,12 +42,17 @@ export const AIPromptBar: React.FC = () => {
     setFilter,
     toggleQuickUrgent,
     quickUrgentOnly,
-    moveTaskStage
+    moveTaskStage,
+    aiActionLogs,
+    addAIActionLog,
+    revertAIAction,
+    clearAIActionLogs
   } = useWorkspaceStore();
 
   const [promptText, setPromptText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showKeyInput, setShowKeyInput] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [tempKey, setTempKey] = useState('');
   const [savedKeySuccess, setSavedKeySuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -111,6 +129,11 @@ export const AIPromptBar: React.FC = () => {
         if (parsed.filter.store) setFilter('store', parsed.filter.store);
         if (parsed.filter.category) setFilter('category', parsed.filter.category);
 
+        addAIActionLog({
+          type: 'FILTER_BOARD',
+          description: `Filter board: ${parsed.explanation || 'Kriteria filter diterapkan'}`
+        });
+
         closeAiPrompt();
         setPromptText('');
         setErrorMessage(null);
@@ -137,19 +160,30 @@ export const AIPromptBar: React.FC = () => {
           const prevSubStatus = targetTask.subStatus;
 
           moveTaskStage(targetTask.id, newStage, newSubStatus);
+
+          const logId = addAIActionLog({
+            type: 'UPDATE_STAGE',
+            description: `Pindahkan "${targetTask.title}" ke stage ${newStage}`,
+            taskId: targetTask.id,
+            taskTitle: targetTask.title,
+            prevStageId: prevStage,
+            prevSubStatus: prevSubStatus,
+            newStageId: newStage,
+            newSubStatus: newSubStatus
+          });
+
           closeAiPrompt();
           setPromptText('');
           setErrorMessage(null);
 
-          // Interactive toast with 7-second undo button
+          // Interactive toast with 7-second undo button synchronized with log
           addToast(
             `Task "${targetTask.title}" dipindahkan ke ${newStage}`,
             'success',
             {
               label: 'Undo',
               onClick: () => {
-                moveTaskStage(targetTask.id, prevStage, prevSubStatus);
-                addToast(`Perubahan task "${targetTask.title}" dibatalkan`, 'info');
+                revertAIAction(logId);
               }
             },
             7000
@@ -203,6 +237,12 @@ export const AIPromptBar: React.FC = () => {
           ...parsed.task,
           storeIds: storeIds.length > 0 ? storeIds : ['ALL_STORES']
         };
+
+        addAIActionLog({
+          type: 'CREATE_TASK',
+          description: `Buka form task baru: "${taskDataToPrefill.title}" (PIC: ${taskDataToPrefill.picHq})`,
+          taskTitle: taskDataToPrefill.title
+        });
 
         closeAiPrompt();
         setPromptText('');
@@ -267,7 +307,32 @@ export const AIPromptBar: React.FC = () => {
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setShowKeyInput(prev => !prev)}
+              onClick={() => {
+                setShowHistory(prev => !prev);
+                setShowKeyInput(false);
+              }}
+              className={`p-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${
+                showHistory
+                  ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30'
+                  : 'glass-control text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
+              }`}
+              title="Riwayat Aksi AI"
+            >
+              <History className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline text-[11px]">Riwayat</span>
+              {aiActionLogs.length > 0 && (
+                <span className="w-4 h-4 rounded-full bg-blue-500/20 text-blue-600 dark:text-blue-400 text-[10px] flex items-center justify-center font-bold">
+                  {aiActionLogs.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowKeyInput(prev => !prev);
+                setShowHistory(false);
+              }}
               className={`p-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1 ${
                 showKeyInput || !geminiApiKey
                   ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
@@ -289,6 +354,110 @@ export const AIPromptBar: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* AI Action History Panel (Collapsible) */}
+        {showHistory && (
+          <div className="px-5 py-3.5 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-50/80 dark:bg-zinc-900/70 space-y-3 animate-in slide-in-from-top-1 max-h-64 overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+                <History className="w-3.5 h-3.5 text-blue-500" />
+                <span>Riwayat Aksi AI ({aiActionLogs.length})</span>
+              </div>
+              {aiActionLogs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearAIActionLogs}
+                  className="text-[11px] text-zinc-400 hover:text-rose-500 flex items-center gap-1 transition"
+                  title="Bersihkan semua log aksi"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Hapus Riwayat</span>
+                </button>
+              )}
+            </div>
+
+            {aiActionLogs.length === 0 ? (
+              <p className="text-[11px] text-zinc-400 italic py-3 text-center">
+                Belum ada riwayat mutasi / aksi AI yang tercatat.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {aiActionLogs.map((log) => {
+                  const timeFormatted = new Date(log.timestamp).toLocaleTimeString('id-ID', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  });
+
+                  return (
+                    <div
+                      key={log.id}
+                      className="p-2.5 rounded-xl bg-white dark:bg-zinc-950/70 border border-zinc-200/70 dark:border-zinc-800 flex items-center justify-between gap-2.5 text-xs"
+                    >
+                      <div className="space-y-0.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span
+                            className={`text-[9px] font-mono px-1.5 py-0.5 rounded border font-semibold ${
+                              log.type === 'UPDATE_STAGE'
+                                ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
+                                : log.type === 'CREATE_TASK'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                                : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
+                            }`}
+                          >
+                            {log.type === 'UPDATE_STAGE' ? 'UPDATE' : log.type === 'CREATE_TASK' ? 'CREATE' : 'FILTER'}
+                          </span>
+                          <span className="font-medium text-zinc-800 dark:text-zinc-200 truncate">
+                            {log.description}
+                          </span>
+                          {log.isReverted && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800 text-zinc-500 font-medium">
+                              Dibatalkan
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-zinc-400 font-mono">
+                          {timeFormatted}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {log.taskId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              closeAiPrompt();
+                              openTaskModal(log.taskId);
+                            }}
+                            className="px-2 py-1 rounded text-[11px] glass-control text-blue-600 dark:text-blue-400 font-medium flex items-center gap-1 hover:bg-blue-500/10 transition"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>Lihat Task</span>
+                          </button>
+                        )}
+
+                        {log.type === 'UPDATE_STAGE' && (
+                          <button
+                            type="button"
+                            disabled={log.isReverted}
+                            onClick={() => revertAIAction(log.id)}
+                            className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition ${
+                              log.isReverted
+                                ? 'opacity-40 cursor-not-allowed text-zinc-400'
+                                : 'glass-control text-amber-600 dark:text-amber-400 hover:bg-amber-500/10'
+                            }`}
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>{log.isReverted ? 'Dibatalkan' : 'Batalkan'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* API Key Panel (Collapsible) */}
         {showKeyInput && (
