@@ -138,6 +138,19 @@ export type AIActionType = 'UPDATE_STAGE' | 'CREATE_TASK' | 'FILTER_BOARD' | 'DE
 
 export type AICommandIntent = 'CREATE_TASK' | 'FILTER_BOARD' | 'UPDATE_TASK' | 'DELETE_TASK' | 'ANSWER_QUERY';
 
+export interface AIActionChip {
+  id: string;
+  label: string;
+  actionIntent: AICommandIntent;
+  payload?: {
+    task?: TaskFormData;
+    targetTaskId?: string;
+    targetStageId?: StageId;
+    targetSubStatus?: string;
+    filter?: Record<string, unknown>;
+  };
+}
+
 export interface AICommandResult {
   intent: AICommandIntent;
   explanation: string;
@@ -162,6 +175,8 @@ export interface AICommandResult {
     targetQuery: string;
     taskId?: string;
   } | null;
+  chips?: AIActionChip[] | null;
+  secondaryTask?: TaskFormData | null;
   chainedAction?: AICommandResult | null;
 }
 

@@ -9,6 +9,7 @@ export interface AIParsingContext {
   stores: Store[];
   todayIso: string;
   activeWorkspace?: string;
+  currentTimeIso?: string;
 }
 
 interface CandidateEndpoint {
