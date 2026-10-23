@@ -10,6 +10,7 @@ import {
   ThemeMode,
   SyncStatus,
   ToastMessage,
+  ToastAction,
   EmergencyBackup,
   TaskFormData
 } from '../types';
@@ -24,10 +25,13 @@ interface WorkspaceStoreState {
 
   // Workspace Data
   tasks: Task[];
+  deletedTasks: Task[];
+  lastDeletedTask: { task: Task; index: number } | null;
   stores: Store[];
   pics: PIC[];
   categories: string[];
   gasWebhookUrl: string;
+  geminiApiKey: string;
   lastModified: string | null;
   lastSyncedAt: string | null;
 
@@ -47,6 +51,7 @@ interface WorkspaceStoreState {
   // Modals
   isTaskModalOpen: boolean;
   editingTaskId: string | null;
+  prefilledTaskData: TaskFormData | null;
 
   isSnoozeModalOpen: boolean;
   snoozeTaskId: string | null;
@@ -55,6 +60,8 @@ interface WorkspaceStoreState {
   directoryTab: 'stores' | 'pics' | 'categories';
 
   isCloudModalOpen: boolean;
+  isRecycleBinOpen: boolean;
+  isAiPromptOpen: boolean;
 
   // Drag and drop
   draggedTaskId: string | null;
@@ -74,11 +81,22 @@ interface WorkspaceStoreState {
   setFilter: <K extends keyof FilterState>(key: K, value: FilterState[K]) => void;
   resetFilters: () => void;
 
+  // AI actions
+  openAiPrompt: () => void;
+  closeAiPrompt: () => void;
+  setGeminiApiKey: (key: string) => void;
+
   // Task actions
-  openTaskModal: (taskId?: string | null) => void;
+  openTaskModal: (taskId?: string | null, prefillData?: TaskFormData | null) => void;
   closeTaskModal: () => void;
   saveTask: (formData: TaskFormData) => void;
   deleteTask: (taskId: string) => void;
+  undoDeleteTask: () => void;
+  restoreTask: (taskId: string) => void;
+  permanentlyDeleteTask: (taskId: string) => void;
+  emptyRecycleBin: () => void;
+  openRecycleBin: () => void;
+  closeRecycleBin: () => void;
   moveTaskStage: (taskId: string, newStageId: StageId, newSubStatus?: string) => void;
 
   // Snooze actions
@@ -118,7 +136,7 @@ interface WorkspaceStoreState {
   setDraggedTaskId: (taskId: string | null) => void;
 
   // Toast actions
-  addToast: (message: string, type?: 'info' | 'success' | 'error') => void;
+  addToast: (message: string, type?: 'info' | 'success' | 'error', action?: ToastAction, duration?: number) => void;
   removeToast: (id: string) => void;
 }
 
@@ -131,6 +149,7 @@ function getInitialWorkspaceData(activeWs: string): WorkspaceData {
       return {
         workspaceName: parsed.workspaceName || activeWs,
         tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+        deletedTasks: Array.isArray(parsed.deletedTasks) ? parsed.deletedTasks : [],
         stores: Array.isArray(parsed.stores) && parsed.stores.length > 0 ? parsed.stores : WTC_CONFIG.DEFAULT_STORES,
         pics: Array.isArray(parsed.pics) && parsed.pics.length > 0 ? parsed.pics : WTC_CONFIG.DEFAULT_PICS,
         categories: Array.isArray(parsed.categories) && parsed.categories.length > 0 ? parsed.categories : WTC_CONFIG.DEFAULT_CATEGORIES,
@@ -151,6 +170,7 @@ function getInitialWorkspaceData(activeWs: string): WorkspaceData {
   return {
     workspaceName: activeWs,
     tasks: initialTasks,
+    deletedTasks: [],
     stores: WTC_CONFIG.DEFAULT_STORES,
     pics: WTC_CONFIG.DEFAULT_PICS,
     categories: WTC_CONFIG.DEFAULT_CATEGORIES,
@@ -229,10 +249,15 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     workspaceList: ['Watch Club', 'Personal Project'],
 
     tasks: initialData.tasks,
+    deletedTasks: initialData.deletedTasks || [],
+    lastDeletedTask: null,
     stores: initialData.stores,
     pics: initialData.pics,
     categories: initialData.categories,
     gasWebhookUrl: initialData.gasWebhookUrl,
+    geminiApiKey: typeof window !== 'undefined'
+      ? (localStorage.getItem('WTC_GEMINI_API_KEY') || (import.meta.env.VITE_GEMINI_API_KEY as string) || '')
+      : '',
     lastModified: initialData.lastModified,
     lastSyncedAt: initialData.lastSyncedAt,
 
@@ -255,6 +280,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
 
     isTaskModalOpen: false,
     editingTaskId: null,
+    prefilledTaskData: null,
 
     isSnoozeModalOpen: false,
     snoozeTaskId: null,
@@ -263,6 +289,8 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     directoryTab: 'stores',
 
     isCloudModalOpen: false,
+    isRecycleBinOpen: false,
+    isAiPromptOpen: false,
 
     draggedTaskId: null,
     toasts: [],
@@ -296,6 +324,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       set({
         activeWorkspace: workspaceName,
         tasks: newData.tasks,
+        deletedTasks: newData.deletedTasks || [],
         stores: newData.stores,
         pics: newData.pics,
         categories: newData.categories,
@@ -355,17 +384,35 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       get().addToast('Filter direset', 'info');
     },
 
-    openTaskModal: (taskId = null) => {
+    // AI actions
+    openAiPrompt: () => set({ isAiPromptOpen: true }),
+    closeAiPrompt: () => set({ isAiPromptOpen: false }),
+    setGeminiApiKey: (key: string) => {
+      const cleanKey = key.trim();
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('WTC_GEMINI_API_KEY', cleanKey);
+      }
+      set({ geminiApiKey: cleanKey });
+      get().addToast('API Key Gemini berhasil disimpan', 'success');
+    },
+
+    // Recycle bin actions
+    openRecycleBin: () => set({ isRecycleBinOpen: true }),
+    closeRecycleBin: () => set({ isRecycleBinOpen: false }),
+
+    openTaskModal: (taskId = null, prefillData = null) => {
       set({
         isTaskModalOpen: true,
-        editingTaskId: taskId || null
+        editingTaskId: taskId || null,
+        prefilledTaskData: prefillData || null
       });
     },
 
     closeTaskModal: () => {
       set({
         isTaskModalOpen: false,
-        editingTaskId: null
+        editingTaskId: null,
+        prefilledTaskData: null
       });
     },
 
@@ -422,6 +469,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedWorkspaceData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: updatedTasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: state.categories,
@@ -435,7 +483,8 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         tasks: updatedTasks,
         lastModified: nowIso,
         isTaskModalOpen: false,
-        editingTaskId: null
+        editingTaskId: null,
+        prefilledTaskData: null
       });
 
       scheduleAutoPush();
@@ -445,12 +494,22 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       get().createEmergencySnapshot();
 
       const state = get();
+      const taskIndex = state.tasks.findIndex(t => t.id === taskId);
+      const taskToDelete = state.tasks[taskIndex];
+      if (!taskToDelete) return;
+
       const updatedTasks = state.tasks.filter(t => t.id !== taskId);
+      const taskWithDeletedAt: Task = {
+        ...taskToDelete,
+        lastActionDate: getTodayIso()
+      };
+      const updatedDeletedTasks = [taskWithDeletedAt, ...(state.deletedTasks || [])];
       const nowIso = new Date().toISOString();
 
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: updatedTasks,
+        deletedTasks: updatedDeletedTasks,
         stores: state.stores,
         pics: state.pics,
         categories: state.categories,
@@ -462,12 +521,150 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       persistWorkspaceData(updatedData);
       set({
         tasks: updatedTasks,
+        deletedTasks: updatedDeletedTasks,
+        lastDeletedTask: { task: taskToDelete, index: taskIndex },
         lastModified: nowIso,
         isTaskModalOpen: false,
-        editingTaskId: null
+        editingTaskId: null,
+        prefilledTaskData: null
       });
 
-      get().addToast('Task berhasil dihapus', 'info');
+      get().addToast(
+        `Task "${taskToDelete.title}" dipindahkan ke sampah`,
+        'info',
+        {
+          label: 'Undo',
+          onClick: () => get().undoDeleteTask()
+        },
+        7000
+      );
+      scheduleAutoPush();
+    },
+
+    undoDeleteTask: () => {
+      const state = get();
+      const last = state.lastDeletedTask;
+      if (!last) return;
+
+      const restoredTask = last.task;
+      const updatedDeletedTasks = (state.deletedTasks || []).filter(t => t.id !== restoredTask.id);
+
+      const newTasks = [...state.tasks];
+      const insertIndex = Math.min(Math.max(0, last.index), newTasks.length);
+      newTasks.splice(insertIndex, 0, restoredTask);
+      const nowIso = new Date().toISOString();
+
+      const updatedData: WorkspaceData = {
+        workspaceName: state.activeWorkspace,
+        tasks: newTasks,
+        deletedTasks: updatedDeletedTasks,
+        stores: state.stores,
+        pics: state.pics,
+        categories: state.categories,
+        gasWebhookUrl: state.gasWebhookUrl,
+        lastModified: nowIso,
+        lastSyncedAt: state.lastSyncedAt
+      };
+
+      persistWorkspaceData(updatedData);
+      set({
+        tasks: newTasks,
+        deletedTasks: updatedDeletedTasks,
+        lastDeletedTask: null,
+        lastModified: nowIso
+      });
+
+      get().addToast(`Task "${restoredTask.title}" berhasil dipulihkan`, 'success');
+      scheduleAutoPush();
+    },
+
+    restoreTask: (taskId: string) => {
+      const state = get();
+      const taskToRestore = (state.deletedTasks || []).find(t => t.id === taskId);
+      if (!taskToRestore) return;
+
+      const updatedDeletedTasks = (state.deletedTasks || []).filter(t => t.id !== taskId);
+      const newTasks = [taskToRestore, ...state.tasks];
+      const nowIso = new Date().toISOString();
+
+      const updatedData: WorkspaceData = {
+        workspaceName: state.activeWorkspace,
+        tasks: newTasks,
+        deletedTasks: updatedDeletedTasks,
+        stores: state.stores,
+        pics: state.pics,
+        categories: state.categories,
+        gasWebhookUrl: state.gasWebhookUrl,
+        lastModified: nowIso,
+        lastSyncedAt: state.lastSyncedAt
+      };
+
+      persistWorkspaceData(updatedData);
+      set({
+        tasks: newTasks,
+        deletedTasks: updatedDeletedTasks,
+        lastModified: nowIso
+      });
+
+      get().addToast(`Task "${taskToRestore.title}" berhasil dipulihkan`, 'success');
+      scheduleAutoPush();
+    },
+
+    permanentlyDeleteTask: (taskId: string) => {
+      get().createEmergencySnapshot();
+      const state = get();
+      const updatedDeletedTasks = (state.deletedTasks || []).filter(t => t.id !== taskId);
+      const nowIso = new Date().toISOString();
+
+      const updatedData: WorkspaceData = {
+        workspaceName: state.activeWorkspace,
+        tasks: state.tasks,
+        deletedTasks: updatedDeletedTasks,
+        stores: state.stores,
+        pics: state.pics,
+        categories: state.categories,
+        gasWebhookUrl: state.gasWebhookUrl,
+        lastModified: nowIso,
+        lastSyncedAt: state.lastSyncedAt
+      };
+
+      persistWorkspaceData(updatedData);
+      set({
+        deletedTasks: updatedDeletedTasks,
+        lastModified: nowIso
+      });
+
+      get().addToast('Task dihapus permanen', 'info');
+      scheduleAutoPush();
+    },
+
+    emptyRecycleBin: () => {
+      get().createEmergencySnapshot();
+      const state = get();
+      const count = (state.deletedTasks || []).length;
+      if (count === 0) return;
+
+      const nowIso = new Date().toISOString();
+      const updatedData: WorkspaceData = {
+        workspaceName: state.activeWorkspace,
+        tasks: state.tasks,
+        deletedTasks: [],
+        stores: state.stores,
+        pics: state.pics,
+        categories: state.categories,
+        gasWebhookUrl: state.gasWebhookUrl,
+        lastModified: nowIso,
+        lastSyncedAt: state.lastSyncedAt
+      };
+
+      persistWorkspaceData(updatedData);
+      set({
+        deletedTasks: [],
+        lastDeletedTask: null,
+        lastModified: nowIso
+      });
+
+      get().addToast(`${count} task dihapus permanen dari keranjang sampah`, 'info');
       scheduleAutoPush();
     },
 
@@ -494,6 +691,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: updatedTasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: state.categories,
@@ -534,6 +732,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: updatedTasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: state.categories,
@@ -573,6 +772,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: updatedTasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: state.categories,
@@ -605,6 +805,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: updatedTasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: state.categories,
@@ -651,6 +852,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
         stores: updatedStores,
         pics: state.pics,
         categories: state.categories,
@@ -673,6 +875,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
         stores: updatedStores,
         pics: state.pics,
         categories: state.categories,
@@ -700,6 +903,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: updatedPics,
         categories: state.categories,
@@ -722,6 +926,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: updatedPics,
         categories: state.categories,
@@ -750,6 +955,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: updatedCategories,
@@ -772,6 +978,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: updatedCategories,
@@ -794,6 +1001,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const updatedData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: state.categories,
@@ -918,6 +1126,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         const merged: WorkspaceData = {
           workspaceName: state.activeWorkspace,
           tasks: remote.tasks,
+          deletedTasks: remote.deletedTasks || state.deletedTasks || [],
           stores: remote.stores && remote.stores.length > 0 ? remote.stores : state.stores,
           pics: remote.pics && remote.pics.length > 0 ? remote.pics : state.pics,
           categories: remote.categories && remote.categories.length > 0 ? remote.categories : state.categories,
@@ -929,6 +1138,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         persistWorkspaceData(merged);
         set({
           tasks: merged.tasks,
+          deletedTasks: merged.deletedTasks,
           stores: merged.stores,
           pics: merged.pics,
           categories: merged.categories,
@@ -955,6 +1165,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const currentWorkspaceData: WorkspaceData = {
         workspaceName: state.activeWorkspace,
         tasks: state.tasks,
+        deletedTasks: state.deletedTasks || [],
         stores: state.stores,
         pics: state.pics,
         categories: state.categories,
@@ -983,6 +1194,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         const merged: WorkspaceData = {
           workspaceName: parsed.workspaceName || state.activeWorkspace,
           tasks: parsed.tasks,
+          deletedTasks: Array.isArray(parsed.deletedTasks) ? parsed.deletedTasks : state.deletedTasks || [],
           stores: Array.isArray(parsed.stores) && parsed.stores.length > 0 ? parsed.stores : state.stores,
           pics: Array.isArray(parsed.pics) && parsed.pics.length > 0 ? parsed.pics : state.pics,
           categories: Array.isArray(parsed.categories) && parsed.categories.length > 0 ? parsed.categories : state.categories,
@@ -994,6 +1206,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         persistWorkspaceData(merged);
         set({
           tasks: merged.tasks,
+          deletedTasks: merged.deletedTasks,
           stores: merged.stores,
           pics: merged.pics,
           categories: merged.categories,
@@ -1027,6 +1240,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           state: {
             workspaceName: state.activeWorkspace,
             tasks: state.tasks,
+            deletedTasks: state.deletedTasks || [],
             stores: state.stores,
             pics: state.pics,
             categories: state.categories,
@@ -1059,6 +1273,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         set({
           activeWorkspace: backup.state.workspaceName,
           tasks: backup.state.tasks,
+          deletedTasks: backup.state.deletedTasks || [],
           stores: backup.state.stores,
           pics: backup.state.pics,
           categories: backup.state.categories,
@@ -1105,14 +1320,14 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
 
     setDraggedTaskId: (taskId: string | null) => set({ draggedTaskId: taskId }),
 
-    addToast: (message: string, type = 'info') => {
+    addToast: (message: string, type = 'info', action?: ToastAction, duration = 3500) => {
       const id = `${Date.now()}_${Math.random()}`;
       set(state => ({
-        toasts: [...state.toasts, { id, message, type }]
+        toasts: [...state.toasts, { id, message, type, action, duration }]
       }));
       setTimeout(() => {
         get().removeToast(id);
-      }, 3500);
+      }, duration);
     },
 
     removeToast: (id: string) => {

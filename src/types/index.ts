@@ -70,6 +70,7 @@ export interface TaskDraft extends TaskFormData {
 export interface WorkspaceData {
   workspaceName: string;
   tasks: Task[];
+  deletedTasks?: Task[];
   stores: Store[];
   pics: PIC[];
   categories: string[];
@@ -101,8 +102,27 @@ export interface SyncStatus {
   type: 'ok' | 'syncing' | 'error';
 }
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastMessage {
   id: string;
   message: string;
   type?: 'info' | 'success' | 'error';
+  duration?: number;
+  action?: ToastAction;
+}
+
+export interface AIParsedTaskResult {
+  title: string;
+  category: string;
+  priority: Priority;
+  deadline: string;
+  picHq: string;
+  storeIds: string[];
+  stageId: StageId;
+  subStatus: string;
+  notes: string;
 }

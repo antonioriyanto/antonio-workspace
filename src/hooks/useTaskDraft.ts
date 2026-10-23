@@ -23,7 +23,8 @@ export function useTaskDraft(
   activeWorkspace: string,
   isModalOpen: boolean,
   isEditing: boolean,
-  initialEditData?: TaskFormData | null
+  initialEditData?: TaskFormData | null,
+  prefillData?: TaskFormData | null
 ) {
   const storageKey = `${WTC_CONFIG.DRAFT_TASK_KEY}_${activeWorkspace.replace(/\s+/g, '_')}`;
 
@@ -42,6 +43,14 @@ export function useTaskDraft(
 
     if (isEditing && initialEditData) {
       setFormData(initialEditData);
+      setIsDraftRestored(false);
+      setLastSavedTime(null);
+      isInitialMount.current = false;
+      return;
+    }
+
+    if (prefillData) {
+      setFormData(prefillData);
       setIsDraftRestored(false);
       setLastSavedTime(null);
       isInitialMount.current = false;
@@ -93,7 +102,7 @@ export function useTaskDraft(
     }
 
     isInitialMount.current = false;
-  }, [isModalOpen, isEditing, initialEditData, storageKey]);
+  }, [isModalOpen, isEditing, initialEditData, prefillData, storageKey]);
 
   // Auto-save to localStorage on every change when in "New Task" mode
   useEffect(() => {
